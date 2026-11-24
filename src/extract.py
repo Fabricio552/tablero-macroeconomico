@@ -71,7 +71,7 @@ def fetch_macro_bundle(period: str = "1y", retries: int = 2) -> tuple[pd.DataFra
             raw_close = _extract_close_frame(raw_download)
             filled_df = raw_close.ffill().dropna()
             if len(filled_df) < 2:
-                raise ValueError("Se necesitan al menos 2 ruedas válidas para calcular variaciones.")
+                raise ValueError("Se necesitan al menos 2 días hábiles válidos para calcular variaciones.")
             return filled_df, raw_close
         except Exception as exc:
             last_error = exc

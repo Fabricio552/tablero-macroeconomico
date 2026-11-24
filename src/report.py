@@ -40,10 +40,10 @@ OUTPUT_HTML = os.path.join(BASE_DIR, "docs", "index.html")
 README_PATH = os.path.join(BASE_DIR, "README.md")
 
 FX_STYLES = {
-    "USD/UYU": {"color": "#1d4ed8", "ls": "-", "dash": "solid", "lw": 2.4, "label": "USD/UYU"},
+    "USD/UYU": {"color": "#1d4ed8", "ls": "-", "dash": "solid", "lw": 2.3, "label": "USD/UYU"},
     "USD/BRL": {"color": "#d97706", "ls": "-", "dash": "solid", "lw": 2.0, "label": "USD/BRL"},
     "USD/ARS": {"color": "#0f766e", "ls": "-", "dash": "solid", "lw": 1.8, "label": "USD/ARS (Oficial)"},
-    "DXY": {"color": "#374151", "ls": "--", "dash": "dash", "lw": 2.0, "label": "DXY (Global)"},
+    "DXY": {"color": "#db2777", "ls": "-", "dash": "solid", "lw": 2.5, "label": "DXY (Global)"},
 }
 
 DRIVER_STYLES = {
@@ -243,7 +243,7 @@ def generate_chart(
         cbar_kws={"shrink": 0.8, "label": "Correlación (r)"},
         ax=ax_corr,
     )
-    ax_corr.set_title("4. Correlación de Cambios Diarios (Últimas 60 Ruedas)", fontweight="bold", fontsize=11.5, pad=10)
+    ax_corr.set_title("4. Correlación de Cambios Diarios (Últimos 60 Días Hábiles)", fontweight="bold", fontsize=11.5, pad=10)
     ax_corr.set_xlabel("")
     ax_corr.set_ylabel("")
     ax_corr.tick_params(axis="x", rotation=30)
@@ -277,103 +277,187 @@ def generate_chart(
     plt.close(fig)
 
 
+def _padded_range(values: np.ndarray, pad_frac: float = 0.14, min_pad: float = 1.5) -> list[float]:
+    """Compute [min, max] with padding so tick labels never collide at axis corners."""
+    vmin = float(np.nanmin(values))
+    vmax = float(np.nanmax(values))
+    span = max(vmax - vmin, 1e-6)
+    pad = max(span * pad_frac, min_pad)
+    return [vmin - pad, vmax + pad]
+
+
+def _build_html_table(summary_df: pd.DataFrame) -> str:
+    """Render a clean responsive executive HTML table without overlapping legends."""
+    import html
+
+    disp = format_markdown_summary(summary_df)
+    headers = "".join(
+        f'<th class="{"num" if i >= 2 else "txt"}">{html.escape(str(col))}</th>'
+        for i, col in enumerate(disp.columns)
+    )
+    rows_html = []
+    for _, row in disp.iterrows():
+        cells = []
+        for i, col in enumerate(disp.columns):
+            val = str(row[col])
+            esc = html.escape(val)
+            if i < 2:
+                cls = "txt fw" if i == 0 else "txt muted"
+            elif col in ("Var 1D", "Var 5D", "YTD", "1A"):
+                if val.startswith("+"):
+                    cls = "num pos"
+                elif val.startswith("-"):
+                    cls = "num neg"
+                else:
+                    cls = "num"
+            else:
+                cls = "num"
+            cells.append(f'<td class="{cls}">{esc}</td>')
+        rows_html.append(f"<tr>{''.join(cells)}</tr>")
+
+    return (
+        '<div class="table-wrap">'
+        "<table>"
+        f"<thead><tr>{headers}</tr></thead>"
+        f"<tbody>{''.join(rows_html)}</tbody>"
+        "</table>"
+        "</div>"
+    )
+
+
 def generate_interactive_dashboard(
     df: pd.DataFrame,
     summary_df: pd.DataFrame,
     corr_matrix: pd.DataFrame,
     output_path: str = OUTPUT_HTML,
 ) -> None:
-    """Generate a self-contained interactive Plotly HTML dashboard for browser / GitHub Pages."""
+    """Generate a self-contained interactive Plotly HTML dashboard with clean card layout."""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     last_date_str = df.index.max().strftime("%Y-%m-%d")
 
-    fig = make_subplots(
-        rows=3,
-        cols=2,
-        specs=[
-            [{"type": "table", "colspan": 2}, None],
-            [{"type": "xy"}, {"type": "xy", "secondary_y": True}],
-            [{"type": "xy"}, {"type": "heatmap"}],
-        ],
-        row_heights=[0.24, 0.41, 0.35],
-        vertical_spacing=0.13,
-        horizontal_spacing=0.09,
-        subplot_titles=(
-            "Resumen Ejecutivo de Mercado (Precios en % • Tasa US 10Y en bps)",
-            "1. Presión Cambiaria vs. Dólar Global (% Acum. 1A)",
-            "2. Drivers Globales: Commodities (% Acum.) y Tasa US 10Y (%)",
-            "3. Ranking de Desempeño Interactivo (Elegí horizonte)",
-            "4. Correlación de Cambios Diarios (Últimas 60 Ruedas)",
-        ),
-    )
+    range_buttons = [
+        dict(count=1, label="1M", step="month", stepmode="backward"),
+        dict(count=3, label="3M", step="month", stepmode="backward"),
+        dict(count=6, label="6M", step="month", stepmode="backward"),
+        dict(count=1, label="YTD", step="year", stepmode="todate"),
+        dict(step="all", label="1A"),
+    ]
+    plot_config = {"responsive": True, "displaylogo": False}
 
-    # Row 1: reservado para tabla resumen (se agrega al final para evitar bug de add_hline/add_vline con go.Table)
-    # Row 2 Col 1: Monedas Regionales + DXY
+    # --- 1) FX vs DXY ---
+    fig_fx = go.Figure()
     fx_cols = [c for c in FX_ASSETS if c in df.columns]
+    fx_pct = (df[fx_cols] / df[fx_cols].iloc[0] - 1.0) * 100.0
     for col in fx_cols:
         st = FX_STYLES[col]
         unit = ASSET_METADATA[col]["unit"]
-        pct_series = (df[col] / df[col].iloc[0] - 1.0) * 100.0
         custom = np.column_stack([df[col].to_numpy(), np.full(len(df), unit)])
-        fig.add_trace(
+        fig_fx.add_trace(
             go.Scatter(
                 x=df.index,
-                y=pct_series.round(2),
+                y=fx_pct[col].round(2),
                 mode="lines",
                 name=st["label"],
-                legendgroup="fx",
                 line=dict(color=st["color"], width=st["lw"], dash=st["dash"]),
                 customdata=custom,
-                hovertemplate=f"<b>{st['label']}</b>: %{{y:+.2f}}%<br>Spot: %{{customdata[0]:.2f}} %{{customdata[1]}}<extra></extra>",
-            ),
-            row=2,
-            col=1,
+                hovertemplate=(
+                    f"<b>{st['label']}</b>: %{{y:+.2f}}%<br>"
+                    "Spot: %{customdata[0]:.2f} %{customdata[1]}<extra></extra>"
+                ),
+            )
         )
+    fig_fx.add_hline(y=0, line_dash="dot", line_color="#9ca3af", line_width=1.1)
+    fig_fx.update_layout(
+        title=dict(text="<b>1. Presión Cambiaria vs. Dólar Global (% Acum. 1A)</b>", x=0.01, y=0.96, yanchor="top", font=dict(size=14)),
+        template="plotly_white",
+        height=455,
+        margin=dict(t=122, l=72, r=24, b=54),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.15, xanchor="left", x=0.0),
+        xaxis=dict(
+            rangeselector=dict(buttons=range_buttons, bgcolor="#f1f5f9", activecolor="#1d4ed8", y=1.02),
+            ticklabelstandoff=6,
+            automargin=True,
+        ),
+        yaxis=dict(
+            title="Var. acumulada (%)",
+            ticksuffix="%",
+            range=_padded_range(fx_pct.to_numpy(), pad_frac=0.14, min_pad=1.5),
+            ticklabelstandoff=8,
+            automargin=True,
+        ),
+    )
 
-    fig.add_hline(y=0, line_dash="dot", line_color="#9ca3af", row=2, col=1)
-
-    # Row 2 Col 2: Commodities + US 10Y Yield
-    for col in [c for c in COMMODITY_ASSETS if c in df.columns]:
+    # --- 2) Drivers Globales ---
+    fig_drv = make_subplots(specs=[[{"secondary_y": True}]])
+    comm_cols = [c for c in COMMODITY_ASSETS if c in df.columns]
+    comm_pct = (df[comm_cols] / df[comm_cols].iloc[0] - 1.0) * 100.0
+    for col in comm_cols:
         st = DRIVER_STYLES[col]
         unit = ASSET_METADATA[col]["unit"]
-        pct_series = (df[col] / df[col].iloc[0] - 1.0) * 100.0
         custom = np.column_stack([df[col].to_numpy(), np.full(len(df), unit)])
-        fig.add_trace(
+        fig_drv.add_trace(
             go.Scatter(
                 x=df.index,
-                y=pct_series.round(2),
+                y=comm_pct[col].round(2),
                 mode="lines",
                 name=col,
-                legendgroup="drivers",
                 line=dict(color=st["color"], width=st["lw"]),
                 customdata=custom,
-                hovertemplate=f"<b>{col}</b>: %{{y:+.2f}}%<br>Precio: %{{customdata[0]:.2f}} %{{customdata[1]}}<extra></extra>",
+                hovertemplate=(
+                    f"<b>{col}</b>: %{{y:+.2f}}%<br>"
+                    "Precio: %{customdata[0]:.2f} %{customdata[1]}<extra></extra>"
+                ),
             ),
-            row=2,
-            col=2,
             secondary_y=False,
         )
-
     if "US 10Y Yield" in df.columns:
         st_r = DRIVER_STYLES["US 10Y Yield"]
-        fig.add_trace(
+        fig_drv.add_trace(
             go.Scatter(
                 x=df.index,
                 y=df["US 10Y Yield"].round(3),
                 mode="lines",
                 name="US 10Y Yield (%)",
-                legendgroup="drivers",
                 line=dict(color=st_r["color"], width=st_r["lw"], dash="dash"),
                 hovertemplate="<b>US 10Y Yield</b>: %{y:.2f}%<extra></extra>",
             ),
-            row=2,
-            col=2,
+            secondary_y=True,
+        )
+        fig_drv.update_yaxes(
+            title_text="Tasa US 10Y (%)",
+            ticksuffix="%",
+            tickformat=".2f",
+            range=_padded_range(df["US 10Y Yield"].to_numpy(), pad_frac=0.12, min_pad=0.1),
+            ticklabelstandoff=6,
             secondary_y=True,
         )
 
-    fig.add_hline(y=0, line_dash="dot", line_color="#9ca3af", row=2, col=2, secondary_y=False)
+    fig_drv.add_hline(y=0, line_dash="dot", line_color="#9ca3af", line_width=1.1, secondary_y=False)
+    fig_drv.update_layout(
+        title=dict(text="<b>2. Drivers Globales: Commodities (% Acum.) y Tasa US 10Y (%)</b>", x=0.01, y=0.96, yanchor="top", font=dict(size=14)),
+        template="plotly_white",
+        height=455,
+        margin=dict(t=122, l=72, r=72, b=54),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.15, xanchor="left", x=0.0),
+        xaxis=dict(
+            rangeselector=dict(buttons=range_buttons, bgcolor="#f1f5f9", activecolor="#1d4ed8", y=1.02),
+            ticklabelstandoff=6,
+            automargin=True,
+        ),
+    )
+    fig_drv.update_yaxes(
+        title_text="Commodities (%)",
+        ticksuffix="%",
+        range=_padded_range(comm_pct.to_numpy(), pad_frac=0.14, min_pad=3.0),
+        ticklabelstandoff=8,
+        automargin=True,
+        secondary_y=False,
+    )
 
-    # Row 3 Col 1: Ranking interactivo con botones por horizonte
+    # --- 3) Ranking Interactivo por Horizonte ---
+    fig_bar = go.Figure()
     price_summary = summary_df[~summary_df["is_rate"]].copy()
     horizons = [
         ("YTD (%)", "var_ytd_num", "%"),
@@ -382,18 +466,26 @@ def generate_interactive_dashboard(
         ("1 Año (%)", "var_1y_num", "%"),
         ("Posición 52S (%)", "pos_52w_pct", "%"),
     ]
-    bar_trace_indices: list[int] = []
+    horizon_ranges: list[list[float]] = []
     for idx, (label, col_key, suffix) in enumerate(horizons):
         ordered = price_summary.sort_values(col_key, ascending=True)
-        vals = ordered[col_key].to_numpy()
+        vals = ordered[col_key].to_numpy(dtype=float)
         if col_key == "pos_52w_pct":
             colors = ["#0ea5e9" for _ in vals]
             text_vals = [f"{v:.0f}% (52S)" for v in vals]
+            x_range = [0.0, 122.0]
         else:
             colors = ["#2563eb" if v >= 0 else "#dc2626" for v in vals]
             text_vals = [f"{v:+.2f}{suffix}" for v in vals]
+            vmin = min(0.0, float(vals.min()))
+            vmax = max(0.0, float(vals.max()))
+            span = max(vmax - vmin, 5.0)
+            pad_left = span * 0.34 if vmin < 0 else span * 0.08
+            pad_right = span * 0.30 if vmax > 0 else span * 0.08
+            x_range = [vmin - pad_left, vmax + pad_right]
 
-        fig.add_trace(
+        horizon_ranges.append(x_range)
+        fig_bar.add_trace(
             go.Bar(
                 x=vals,
                 y=ordered["Activo"],
@@ -412,17 +504,58 @@ def generate_interactive_dashboard(
                     "Último: %{customdata[0]:.2f}<br>"
                     "Rango 52S: %{customdata[1]}<extra></extra>"
                 ),
-            ),
-            row=3,
-            col=1,
+            )
         )
-        bar_trace_indices.append(len(fig.data) - 1)
 
-    fig.add_vline(x=0, line_color="#4b5563", line_width=1, row=3, col=1)
+    fig_bar.add_vline(x=0, line_color="#4b5563", line_width=1.1)
+    horizon_buttons = [
+        dict(
+            label=label,
+            method="update",
+            args=[
+                {"visible": [i == idx for i in range(len(horizons))]},
+                {"xaxis.range": horizon_ranges[idx]},
+            ],
+        )
+        for idx, (label, _, _) in enumerate(horizons)
+    ]
 
-    # Row 3 Col 2: Heatmap interactivo de correlación
-    fig.add_trace(
-        go.Heatmap(
+    rate_rows = summary_df[summary_df["is_rate"]]
+    rate_note = ""
+    if not rate_rows.empty:
+        r0 = rate_rows.iloc[0]
+        rate_note = f"US 10Y Yield (en bps): {r0['Último']:.2f}% | 1D: {r0['Var 1D']} | YTD: {r0['YTD']} | 52S: {r0['pos_52w_pct']:.0f}%"
+
+    fig_bar.update_layout(
+        title=dict(
+            text=f"<b>3. Ranking de Desempeño Interactivo</b><br><sup>{rate_note}</sup>",
+            x=0.01,
+            font=dict(size=14),
+        ),
+        updatemenus=[
+            dict(
+                type="buttons",
+                direction="right",
+                active=0,
+                x=0.0,
+                y=1.14,
+                xanchor="left",
+                yanchor="top",
+                bgcolor="#f1f5f9",
+                bordercolor="#cbd5e1",
+                buttons=horizon_buttons,
+            )
+        ],
+        template="plotly_white",
+        height=440,
+        margin=dict(t=108, l=95, r=28, b=48),
+        xaxis=dict(range=horizon_ranges[0], ticksuffix="%", ticklabelstandoff=6),
+        yaxis=dict(ticklabelstandoff=8, automargin=True),
+    )
+
+    # --- 4) Heatmap de Correlación ---
+    fig_corr = go.Figure(
+        data=go.Heatmap(
             z=corr_matrix.values,
             x=list(corr_matrix.columns),
             y=list(corr_matrix.index),
@@ -432,136 +565,127 @@ def generate_interactive_dashboard(
             reversescale=True,
             text=corr_matrix.values,
             texttemplate="%{text:.2f}",
-            hovertemplate="%{y} vs %{x}<br>Correlación (60 ruedas): <b>%{z:.2f}</b><extra></extra>",
-            colorbar=dict(title="r", len=0.33, y=0.17),
-        ),
-        row=3,
-        col=2,
-    )
-
-    # Row 1: Tabla resumen interactiva (agregada después de add_hline / add_vline)
-    disp = format_markdown_summary(summary_df)
-    cell_fills = []
-    for col_name in disp.columns:
-        if col_name in ("Var 1D", "Var 5D", "YTD", "1A"):
-            col_colors = []
-            for val_str in disp[col_name]:
-                if str(val_str).startswith("+"):
-                    col_colors.append("#eff6ff")
-                elif str(val_str).startswith("-"):
-                    col_colors.append("#fef2f2")
-                else:
-                    col_colors.append("#f8fafc")
-            cell_fills.append(col_colors)
-        else:
-            cell_fills.append(["#ffffff" if i % 2 == 0 else "#f8fafc" for i in range(len(disp))])
-
-    fig.add_trace(
-        go.Table(
-            header=dict(
-                values=[f"<b>{c}</b>" for c in disp.columns],
-                fill_color="#0f172a",
-                font=dict(color="white", size=12),
-                align=["left", "left", "right", "right", "right", "right", "right", "right"],
-                height=30,
-            ),
-            cells=dict(
-                values=[disp[c].tolist() for c in disp.columns],
-                fill_color=cell_fills,
-                font=dict(color="#111827", size=11.5),
-                align=["left", "left", "right", "right", "right", "right", "right", "right"],
-                height=26,
-            ),
-        ),
-        row=1,
-        col=1,
-    )
-
-    # Selector temporal sincronizado para series de tiempo (Row 2)
-    range_buttons = [
-        dict(count=1, label="1M", step="month", stepmode="backward"),
-        dict(count=3, label="3M", step="month", stepmode="backward"),
-        dict(count=6, label="6M", step="month", stepmode="backward"),
-        dict(count=1, label="YTD", step="year", stepmode="todate"),
-        dict(step="all", label="1A"),
-    ]
-    fig.update_xaxes(
-        rangeselector=dict(
-            buttons=range_buttons,
-            bgcolor="#f1f5f9",
-            activecolor="#1d4ed8",
-            y=1.02,
-        ),
-        row=2,
-        col=1,
-    )
-    fx_xaxis_ref = fig.get_subplot(2, 1).xaxis.plotly_name.replace("axis", "")
-    fig.update_xaxes(matches=fx_xaxis_ref, row=2, col=2)
-    fig.update_xaxes(ticksuffix="%", row=3, col=1)
-    fig.update_yaxes(title_text="Var. acumulada (%)", ticksuffix="%", row=2, col=1)
-    fig.update_yaxes(title_text="Commodities (%)", ticksuffix="%", row=2, col=2, secondary_y=False)
-    fig.update_yaxes(title_text="Tasa US 10Y (%)", ticksuffix="%", row=2, col=2, secondary_y=True)
-    fig.update_yaxes(autorange="reversed", row=3, col=2)
-
-    # Elevar los títulos de la fila 2 para dejar lugar limpio al rangeselector
-    for ann in fig.layout.annotations:
-        if ann.text.startswith(("1. ", "2. ")):
-            ann.yshift = 28
-
-    # Botones interactivos para el ranking (Row 3 Col 1)
-    horizon_buttons = [
-        dict(
-            label=label,
-            method="restyle",
-            args=[{"visible": [i == idx for i in range(len(horizons))]}, bar_trace_indices],
+            hovertemplate="%{y} vs %{x}<br>Correlación (60 días hábiles): <b>%{z:.2f}</b><extra></extra>",
+            colorbar=dict(title="r", thickness=14, len=0.88),
         )
-        for idx, (label, _, _) in enumerate(horizons)
-    ]
-
-    fig.update_layout(
+    )
+    fig_corr.update_layout(
         title=dict(
-            text=(
-                "<b>🌎 Tablero Macroeconómico Interactivo — Uruguay / LatAm</b>"
-                f"<br><sup>Cierre al {last_date_str} • Fuente: Yahoo Finance (yfinance) • Hacé clic en la leyenda para aislar series</sup>"
-            ),
-            x=0.5,
-            xanchor="center",
-            font=dict(size=18, color="#0f172a"),
+            text="<b>4. Correlación de Cambios Diarios (Últimos 60 Días Hábiles)</b><br><sup>Precios: retorno % | Tasa US 10Y: cambio diario (p.p.)</sup>",
+            x=0.01,
+            y=0.96,
+            yanchor="top",
+            font=dict(size=14),
         ),
-        updatemenus=[
-            dict(
-                type="buttons",
-                direction="right",
-                active=0,
-                x=0.0,
-                y=0.312,
-                xanchor="left",
-                yanchor="bottom",
-                bgcolor="#f1f5f9",
-                bordercolor="#cbd5e1",
-                buttons=horizon_buttons,
-            )
-        ],
         template="plotly_white",
-        height=1320,
-        margin=dict(t=110, l=70, r=60, b=50),
-        hovermode="closest",
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=0.775,
-            xanchor="center",
-            x=0.5,
-            bgcolor="rgba(255,255,255,0.9)",
-        ),
+        height=455,
+        margin=dict(t=88, l=100, r=75, b=78),
+        xaxis=dict(tickangle=-30, ticklabelstandoff=6, automargin=True),
+        yaxis=dict(autorange="reversed", ticklabelstandoff=8, automargin=True),
     )
 
-    fig.write_html(
-        output_path,
-        full_html=True,
-        include_plotlyjs="cdn",
-        config={"responsive": True, "displaylogo": False},
-    )
+    html_table = _build_html_table(summary_df)
+    div_fx = fig_fx.to_html(full_html=False, include_plotlyjs="cdn", config=plot_config)
+    div_drv = fig_drv.to_html(full_html=False, include_plotlyjs=False, config=plot_config)
+    div_bar = fig_bar.to_html(full_html=False, include_plotlyjs=False, config=plot_config)
+    div_corr = fig_corr.to_html(full_html=False, include_plotlyjs=False, config=plot_config)
+
+    html_doc = f"""<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tablero Macroeconómico Regional — Uruguay / LatAm</title>
+  <style>
+    :root {{
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --border: #e2e8f0;
+      --ink: #0f172a;
+      --muted: #475569;
+      --pos: #1d4ed8;
+      --pos-bg: #eff6ff;
+      --neg: #b91c1c;
+      --neg-bg: #fef2f2;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      padding: 24px;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.45;
+    }}
+    main {{ max-width: 1440px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }}
+    header {{
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 22px;
+    }}
+    header h1 {{ margin: 0 0 4px; font-size: 1.35rem; }}
+    header p {{ margin: 0; color: var(--muted); font-size: 0.92rem; }}
+    .card {{
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      overflow: hidden;
+    }}
+    .card h2 {{ margin: 0 0 10px; font-size: 1rem; color: var(--ink); }}
+    .table-wrap {{ overflow-x: auto; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; }}
+    th {{
+      background: #0f172a;
+      color: #ffffff;
+      font-weight: 600;
+      padding: 9px 12px;
+      white-space: nowrap;
+    }}
+    td {{ padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }}
+    tbody tr:nth-child(even) {{ background: #f8fafc; }}
+    th.txt, td.txt {{ text-align: left; }}
+    th.num, td.num {{ text-align: right; }}
+    td.fw {{ font-weight: 600; }}
+    td.muted {{ color: var(--muted); }}
+    td.pos {{ color: var(--pos); background: var(--pos-bg); font-weight: 600; }}
+    td.neg {{ color: var(--neg); background: var(--neg-bg); font-weight: 600; }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }}
+    @media (max-width: 1024px) {{
+      body {{ padding: 14px; }}
+      .grid {{ grid-template-columns: 1fr; }}
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>🌎 Tablero Macroeconómico Interactivo — Uruguay / LatAm</h1>
+      <p>Cierre al <strong>{last_date_str}</strong> • Fuente: Yahoo Finance (yfinance) • Hacé clic en la leyenda para aislar series o usá los filtros temporales</p>
+    </header>
+    <section class="card">
+      <h2>Resumen Ejecutivo de Mercado (Precios en % • Tasa US 10Y en bps)</h2>
+      {html_table}
+    </section>
+    <section class="grid">
+      <div class="card">{div_fx}</div>
+      <div class="card">{div_drv}</div>
+      <div class="card">{div_bar}</div>
+      <div class="card">{div_corr}</div>
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html_doc)
 
 
 def update_readme(summary_df: pd.DataFrame, readme_path: str = README_PATH) -> None:
@@ -607,7 +731,7 @@ GitHub Actions (.github/workflows/update_macro.yml — Lun–Vie 21:30 UTC)
 ## 📐 Criterios Metodológicos
 - **Tasas vs. Precios:** `US 10Y Yield` (`^TNX`) reporta variaciones en **puntos básicos (`bps`)**; monedas, índices y commodities reportan variaciones porcentuales (`%`).
 - **Baseline YTD:** calcula el retorno año corrido respecto al **último cierre del año calendario anterior** (si la serie inicia en el año en curso, usa el primer registro disponible).
-- **Correlaciones (60 ruedas):** se calculan sobre cambios diarios observados sin ceros artificiales por feriados cruzados entre EE. UU. y LatAm (`pct_change()` para precios y `diff()` para la tasa `US 10Y`).
+- **Correlaciones (60 días hábiles):** se calculan sobre cambios diarios observados sin ceros artificiales por feriados cruzados entre EE. UU. y LatAm (`pct_change()` para precios y `diff()` para la tasa `US 10Y`).
 - **Alcance de fuentes:** los datos provienen de Yahoo Finance (`yfinance`); en particular, `USD/ARS` (`ARS=X`) refleja el tipo de cambio oficial mayorista.
 
 ## 🚀 Ejecución Local
