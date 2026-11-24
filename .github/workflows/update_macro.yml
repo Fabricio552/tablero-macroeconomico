@@ -1,0 +1,34 @@
+name: Actualizar Tablero Macroeconómico
+
+on:
+  schedule:
+    - cron: '30 21 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run-macro-tracker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Ejecutar pipeline macro
+        run: python src/report.py
+
+      - name: Guardar cambios en GitHub
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "GitHub Actions"
+          git add README.md output/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "chore: actualización diaria tablero macro" && git push)
