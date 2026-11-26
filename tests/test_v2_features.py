@@ -6,6 +6,7 @@ from src.analyze import (
     compute_correlations,
     compute_summary_metrics,
     detect_alerts,
+    format_email_report,
     format_whatsapp_report,
     generate_morning_brief,
     save_history_snapshot,
@@ -129,6 +130,13 @@ def _clear_notification_env(monkeypatch):
         "TELEGRAM_CHAT_ID",
         "DASHBOARD_URL",
         "GITHUB_REPOSITORY",
+        "EMAIL_FROM",
+        "EMAIL_PASSWORD",
+        "EMAIL_TO",
+        "EMAIL_SMTP_HOST",
+        "EMAIL_SMTP_PORT",
+        "CALLMEBOT_PHONE",
+        "CALLMEBOT_APIKEY",
         "TWILIO_ACCOUNT_SID",
         "TWILIO_AUTH_TOKEN",
         "TWILIO_WHATSAPP_FROM",
@@ -250,3 +258,122 @@ def test_send_optional_alerts_whatsapp_webhook_and_evolution_mode(monkeypatch):
     assert calls[0][1]["json"]["number"] == "12036300112233@g.us"
     assert "text" in calls[0][1]["json"]
     assert set(calls[0][1]["json"].keys()) == {"number", "text"}
+
+
+def test_send_optional_alerts_callmebot_whatsapp(monkeypatch):
+    _clear_notification_env(monkeypatch)
+    monkeypatch.setenv("CALLMEBOT_PHONE", "+598 99 123-456")
+    monkeypatch.setenv("CALLMEBOT_APIKEY", "7654321")
+
+    calls = []
+
+    class DummyResp:
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return DummyResp()
+
+    monkeypatch.setattr("src.analyze.requests.get", fake_get)
+
+    calm_alerts = [{"severity": "info", "asset": "Mercado", "title": "Normal", "detail": "Ok", "action": "Ok"}]
+    ok = send_optional_alerts(calm_alerts, ["Resumen diario"], "2026-11-26")
+    assert ok is True
+    assert len(calls) == 1
+    url, kwargs = calls[0]
+    assert url == "https://api.callmebot.com/whatsapp.php"
+    assert kwargs["params"]["phone"] == "+59899123456"
+    assert kwargs["params"]["apikey"] == "7654321"
+    assert len(kwargs["params"]["text"]) <= 1150
+    assert "Sin alertas críticas hoy" in kwargs["params"]["text"]
+
+
+def test_format_email_report_renders_table_html_and_cid():
+    dates = pd.bdate_range("2026-11-01", periods=10)
+    df = pd.DataFrame(
+        {
+            "USD/UYU": np.linspace(39.8, 40.77, 10),
+            "UI (BCU)": np.linspace(6.68, 6.7172, 10),
+        },
+        index=dates,
+    )
+    summary = compute_summary_metrics(df)
+    alerts = detect_alerts(summary)
+    brief = generate_morning_brief(summary, alerts)
+
+    subject, plain_text, html_body = format_email_report(
+        alerts=alerts,
+        brief=brief,
+        date_str="2026-11-26",
+        summary_df=summary,
+        dashboard_url="https://fabricio552.github.io/tablero-macroeconomico/",
+        chart_cid="chart123@tablero.local",
+    )
+    assert "[ALERTA]" in subject
+    assert "40.77" in plain_text
+    assert "USD/UYU" in html_body
+    assert "6.7172" in html_body
+    assert "cid:chart123@tablero.local" in html_body
+    assert "https://fabricio552.github.io/tablero-macroeconomico/" in html_body
+
+
+def test_send_optional_alerts_email_gmail_ssl_and_starttls_with_chart(monkeypatch, tmp_path):
+    _clear_notification_env(monkeypatch)
+    monkeypatch.setenv("EMAIL_FROM", "mi.correo@gmail.com")
+    monkeypatch.setenv("EMAIL_PASSWORD", "abcd efgh ijkl mnop")
+
+    chart_file = tmp_path / "macro_dashboard.png"
+    chart_file.write_bytes(b"\x89PNG\r\n\x1a\nfake-png")
+
+    events = []
+
+    class DummySMTP:
+        def __init__(self, host, port, **kwargs):
+            events.append(("init", host, port))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def ehlo(self):
+            events.append(("ehlo",))
+
+        def starttls(self, **kwargs):
+            events.append(("starttls",))
+
+        def login(self, user, password):
+            events.append(("login", user, password))
+
+        def send_message(self, msg):
+            events.append(("send", msg))
+
+    monkeypatch.setattr("src.analyze.smtplib.SMTP_SSL", DummySMTP)
+    monkeypatch.setattr("src.analyze.smtplib.SMTP", DummySMTP)
+
+    calm = [{"severity": "info", "asset": "Mercado", "title": "Normal", "detail": "Ok", "action": "Ok"}]
+    ok_ssl = send_optional_alerts(calm, ["Brief diario"], "2026-11-26", chart_path=str(chart_file))
+    assert ok_ssl is True
+    assert ("init", "smtp.gmail.com", 465) in events
+    assert ("login", "mi.correo@gmail.com", "abcdefghijklmnop") in events
+
+    sent_msg = [item[1] for item in events if item[0] == "send"][0]
+    assert sent_msg["To"] == "mi.correo@gmail.com"
+    assert "Cierre 2026-11-26" in sent_msg["Subject"]
+    related_parts = [p for p in sent_msg.walk() if p.get_content_type() == "image/png"]
+    assert len(related_parts) == 1
+    assert related_parts[0].get_payload(decode=True) == b"\x89PNG\r\n\x1a\nfake-png"
+
+    # Custom SMTP over STARTTLS port 587 with multiple recipients
+    events.clear()
+    monkeypatch.setenv("EMAIL_SMTP_HOST", "smtp.office365.com")
+    monkeypatch.setenv("EMAIL_SMTP_PORT", "587")
+    monkeypatch.setenv("EMAIL_TO", "equipo@empresa.com, finanzas@empresa.com")
+    ok_tls = send_optional_alerts(calm, ["Brief"], "2026-11-26")
+    assert ok_tls is True
+    assert ("init", "smtp.office365.com", 587) in events
+    assert ("starttls",) in events
+    sent_tls = [item[1] for item in events if item[0] == "send"][0]
+    assert sent_tls["To"] == "equipo@empresa.com, finanzas@empresa.com"

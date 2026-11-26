@@ -1050,7 +1050,7 @@ Yahoo Finance (yfinance) + BCU vía datosUruguay.com (UI y BRL/UYU)
         │
         ▼
   src/report.py    ──▶ output/macro_dashboard.png + docs/index.html (Simulador) + README.md
-        │              (+ notificaciones automáticas WhatsApp / Slack / Telegram en CI)
+        │              (+ notificaciones automáticas Email / WhatsApp / Slack / Telegram en CI)
         ▲
 GitHub Actions (.github/workflows/update_macro.yml — Lun–Vie 21:30 UTC)
 ```
@@ -1062,7 +1062,7 @@ GitHub Actions (.github/workflows/update_macro.yml — Lun–Vie 21:30 UTC)
 - **Correlaciones (60 días hábiles):** calculadas sobre cambios diarios observados de activos de mercado (`pct_change()` en precios, `diff()` en tasas), excluyendo `UI (BCU)` por ser una interpolación diaria de inflación pasada.
 - **Fuentes y Atribución:** {sources_md}. Datos oficiales del BCU consumidos vía [datosUruguay.com](https://datosuruguay.com) bajo licencia CC-BY-4.0; `USD/ARS` (`ARS=X`) refleja tipo de cambio oficial mayorista.
 
-## 🔔 Notificaciones Automáticas (WhatsApp, Slack y Telegram)
+## 🔔 Notificaciones Automáticas (Email, WhatsApp, Slack y Telegram)
 
 ```bash
 python -m venv .venv
@@ -1074,10 +1074,13 @@ python src/report.py
 
 Para activar envíos automáticos en GitHub Actions (**Settings → Secrets and variables → Actions**):
 
-- **WhatsApp diario al cierre (Lun–Vie con cierres clave, alertas y link al tablero):**
-  - *Vía Twilio WhatsApp:* `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_TO` (ej. `+59899123456`, admite múltiples separados por coma) y opcional `TWILIO_WHATSAPP_FROM` (por defecto usa Twilio Sandbox `whatsapp:+14155238886`).
-  - *Vía Webhook externo (Evolution API, Make, Zapier o n8n para chats o grupos):* `WHATSAPP_WEBHOOK_URL` y opcionales `WHATSAPP_WEBHOOK_TOKEN` / `WHATSAPP_WEBHOOK_TO`.
-  - *Opcional:* `DASHBOARD_URL` si querés fijar un enlace distinto al de GitHub Pages del repositorio.
+- **Email diario ejecutivo al cierre (Lun–Vie con tabla, alertas, Morning Brief, gráfico adjunto y link al tablero — Recomendado):**
+  - *Gmail (2 pasos):* `EMAIL_FROM` (tu correo Gmail) y `EMAIL_PASSWORD` (**Contraseña de aplicación** de Google de 16 caracteres).
+  - *Opcionales:* `EMAIL_TO` (si se omite, se envía al mismo `EMAIL_FROM`; admite varios correos separados por coma), `EMAIL_SMTP_HOST` (por defecto `smtp.gmail.com`), `EMAIL_SMTP_PORT` (por defecto `465` SSL; admite `587` STARTTLS) y `DASHBOARD_URL`.
+- **WhatsApp diario al cierre (opcional):**
+  - *CallMeBot:* `CALLMEBOT_PHONE` y `CALLMEBOT_APIKEY`.
+  - *Twilio WhatsApp:* `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_TO` y opcional `TWILIO_WHATSAPP_FROM`.
+  - *Webhook externo (Evolution API / Make / n8n):* `WHATSAPP_WEBHOOK_URL` y opcionales `WHATSAPP_WEBHOOK_TOKEN` / `WHATSAPP_WEBHOOK_TO`.
 - **Slack / Telegram (solo cuando saltan alertas `HIGH`/`MEDIUM`):** `SLACK_WEBHOOK_URL` o `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`.
 
 ---
@@ -1102,5 +1105,6 @@ if __name__ == "__main__":
         morning_brief,
         data.index.max().strftime("%Y-%m-%d"),
         summary_df=metrics,
+        chart_path=OUTPUT_IMG,
     )
     print("Tablero macro V2 actualizado exitosamente (estático + interactivo + histórico).")

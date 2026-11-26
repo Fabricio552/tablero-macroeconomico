@@ -1,4 +1,10 @@
+from email.message import EmailMessage
+from email.utils import make_msgid
+import html
 import os
+import re
+import smtplib
+import ssl
 import numpy as np
 import pandas as pd
 import requests
@@ -548,19 +554,273 @@ def _send_whatsapp_webhook(
     return sent_any
 
 
+def _send_callmebot_whatsapp(message: str) -> bool:
+    phone_raw = os.environ.get("CALLMEBOT_PHONE", "").strip()
+    apikey = os.environ.get("CALLMEBOT_APIKEY", "").strip()
+    if not (phone_raw and apikey):
+        return False
+
+    clean_phone = "".join(ch for ch in phone_raw if ch.isdigit() or ch == "+")
+    if not clean_phone:
+        return False
+
+    try:
+        resp = requests.get(
+            "https://api.callmebot.com/whatsapp.php",
+            params={"phone": clean_phone, "text": message, "apikey": apikey},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        print("[INFO] Reporte diario enviado por CallMeBot WhatsApp.")
+        return True
+    except Exception as exc:
+        print(f"[WARN] No se pudo enviar WhatsApp vía CallMeBot: {exc}")
+        return False
+
+
+def _markdown_to_html(text: str) -> str:
+    escaped = html.escape(text)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"`(.+?)`", r"<code>\1</code>", escaped)
+    return escaped
+
+
+def format_email_report(
+    alerts: list[dict[str, str]],
+    brief: list[str],
+    date_str: str,
+    summary_df: pd.DataFrame | None = None,
+    dashboard_url: str | None = None,
+    chart_cid: str | None = None,
+) -> tuple[str, str, str]:
+    """Build (subject, plain_text, html_body) for daily executive macro email delivery."""
+    resolved_url = _resolve_dashboard_url(dashboard_url)
+    actionable = [a for a in alerts if a["severity"] in ("high", "medium")]
+
+    if actionable:
+        subject = f"🚨 [ALERTA] Monitor Macro UY/LatAm — {date_str} ({len(actionable)} alertas)"
+    else:
+        subject = f"📊 Monitor Macro UY/LatAm — Cierre {date_str}"
+
+    plain_text = format_whatsapp_report(
+        alerts=alerts,
+        brief=brief,
+        date_str=date_str,
+        summary_df=summary_df,
+        dashboard_url=resolved_url,
+        max_chars=4000,
+    ).replace("*", "")
+
+    badge_colors = {
+        "high": ("#fef2f2", "#fecaca", "#b91c1c"),
+        "medium": ("#fffbeb", "#fde68a", "#b45309"),
+        "info": ("#f0fdf4", "#bbf7d0", "#15803d"),
+    }
+    alert_cards = []
+    for a in alerts[:6]:
+        sev = a.get("severity", "info")
+        bg, brd, clr = badge_colors.get(sev, badge_colors["info"])
+        alert_cards.append(
+            f"<div style='background:{bg};border-left:4px solid {brd};padding:10px 12px;margin-bottom:8px;border-radius:6px;'>"
+            f"<div style='font-weight:700;color:{clr};font-size:13px;'>[{html.escape(sev.upper())}] {html.escape(a['title'])}</div>"
+            f"<div style='color:#334155;font-size:13px;margin-top:2px;'>{html.escape(a['detail'])}</div>"
+            f"<div style='color:#475569;font-size:12px;margin-top:3px;'><em>Acción:</em> {html.escape(a['action'])}</div>"
+            f"</div>"
+        )
+
+    brief_html = "".join(
+        f"<li style='margin-bottom:6px;line-height:1.45;'>{_markdown_to_html(item)}</li>"
+        for item in brief
+    )
+
+    table_html = ""
+    if summary_df is not None and not summary_df.empty:
+        rows_html = []
+        for _, row in summary_df.iterrows():
+            activo = str(row.get("Activo", ""))
+            is_idx = bool(row.get("is_index", False))
+            ultimo_raw = row.get("Último", "")
+            try:
+                ultimo_txt = f"{float(ultimo_raw):.4f}" if is_idx else f"{float(ultimo_raw):g}"
+            except (TypeError, ValueError):
+                ultimo_txt = str(ultimo_raw)
+
+            v1 = float(row.get("var_1d_num", 0.0) or 0.0)
+            vy = float(row.get("var_ytd_num", 0.0) or 0.0)
+            z1 = float(row.get("z_score_1d", 0.0) or 0.0)
+            c1 = "#1d4ed8" if v1 > 0 else ("#b91c1c" if v1 < 0 else "#334155")
+            cy = "#1d4ed8" if vy > 0 else ("#b91c1c" if vy < 0 else "#334155")
+            cz = "#b45309;font-weight:700" if abs(z1) >= 2.0 else "#475569"
+
+            rows_html.append(
+                "<tr style='border-bottom:1px solid #e2e8f0;'>"
+                f"<td style='padding:7px 8px;font-weight:600;color:#0f172a;'>{html.escape(activo)}</td>"
+                f"<td style='padding:7px 8px;text-align:right;font-weight:600;'>{html.escape(ultimo_txt)}</td>"
+                f"<td style='padding:7px 8px;text-align:right;color:{c1};font-weight:600;'>{html.escape(str(row.get('Var 1D', '-')))}</td>"
+                f"<td style='padding:7px 8px;text-align:right;'>{html.escape(str(row.get('Var 5D', '-')))}</td>"
+                f"<td style='padding:7px 8px;text-align:right;color:{cy};font-weight:600;'>{html.escape(str(row.get('YTD', '-')))}</td>"
+                f"<td style='padding:7px 8px;text-align:right;color:{cz};'>{html.escape(str(row.get('Z-Score 1D', '-')))}</td>"
+                f"<td style='padding:7px 8px;text-align:right;color:#475569;'>{html.escape(str(row.get('Rango 52S', '-')))}</td>"
+                "</tr>"
+            )
+        table_html = (
+            "<h3 style='margin:20px 0 8px;font-size:15px;color:#0f172a;'>📊 Resumen Ejecutivo de Mercado</h3>"
+            "<div style='overflow-x:auto;'>"
+            "<table style='width:100%;border-collapse:collapse;font-size:12.5px;'>"
+            "<thead><tr style='background:#0f172a;color:#ffffff;'>"
+            "<th style='padding:8px;text-align:left;'>Activo</th>"
+            "<th style='padding:8px;text-align:right;'>Último</th>"
+            "<th style='padding:8px;text-align:right;'>Var 1D</th>"
+            "<th style='padding:8px;text-align:right;'>Var 5D</th>"
+            "<th style='padding:8px;text-align:right;'>YTD</th>"
+            "<th style='padding:8px;text-align:right;'>Z-Score</th>"
+            "<th style='padding:8px;text-align:right;'>Rango 52S</th>"
+            "</tr></thead>"
+            f"<tbody>{''.join(rows_html)}</tbody>"
+            "</table></div>"
+        )
+
+    chart_html = ""
+    if chart_cid:
+        chart_html = (
+            "<h3 style='margin:20px 0 8px;font-size:15px;color:#0f172a;'>📈 Tablero Ejecutivo (4 Vistas)</h3>"
+            f"<img src='cid:{html.escape(chart_cid)}' alt='Tablero Macroeconómico' "
+            "style='width:100%;max-width:700px;height:auto;border:1px solid #e2e8f0;border-radius:8px;display:block;' />"
+        )
+
+    html_body = f"""<!DOCTYPE html>
+<html lang="es">
+<body style="margin:0;padding:16px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0f172a;">
+  <div style="max-width:740px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
+    <div style="background:#0f172a;color:#ffffff;padding:18px 20px;">
+      <div style="font-size:18px;font-weight:700;">🌎 Monitor Macroeconómico V2 — Uruguay / LatAm</div>
+      <div style="font-size:13px;color:#cbd5e1;margin-top:4px;">Cierre al {html.escape(date_str)} • Datos Yahoo Finance + BCU (UI y BRL/UYU)</div>
+      <div style="margin-top:12px;">
+        <a href="{html.escape(resolved_url)}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;font-size:13px;padding:8px 14px;border-radius:6px;">Abrir Tablero Interactivo y Simulador →</a>
+      </div>
+    </div>
+    <div style="padding:18px 20px;">
+      <h3 style="margin:0 0 10px;font-size:15px;color:#0f172a;">🚨 Radar de Alertas del Día</h3>
+      {''.join(alert_cards)}
+      <h3 style="margin:18px 0 8px;font-size:15px;color:#0f172a;">📝 Morning Brief Ejecutivo</h3>
+      <ul style="margin:0;padding-left:18px;font-size:13.5px;color:#1e293b;">{brief_html}</ul>
+      {table_html}
+      {chart_html}
+      <p style="margin:20px 0 0;font-size:11.5px;color:#64748b;border-top:1px solid #e2e8f0;padding-top:10px;">
+        Envío automático diario (Lun–Vie). Datos oficiales BCU vía datosUruguay.com (CC-BY-4.0).
+      </p>
+    </div>
+  </div>
+</body>
+</html>"""
+    return subject, plain_text, html_body
+
+
+def _send_email_report(
+    alerts: list[dict[str, str]],
+    brief: list[str],
+    date_str: str,
+    summary_df: pd.DataFrame | None = None,
+    dashboard_url: str | None = None,
+    chart_path: str | None = None,
+) -> bool:
+    email_from = os.environ.get("EMAIL_FROM", "").strip()
+    email_password = os.environ.get("EMAIL_PASSWORD", "").strip()
+    if not (email_from and email_password):
+        return False
+
+    to_raw = os.environ.get("EMAIL_TO", "").strip() or email_from
+    recipients = [item.strip() for item in to_raw.split(",") if item.strip()]
+    if not recipients:
+        return False
+
+    smtp_host = os.environ.get("EMAIL_SMTP_HOST", "").strip() or "smtp.gmail.com"
+    port_raw = os.environ.get("EMAIL_SMTP_PORT", "").strip() or "465"
+    try:
+        smtp_port = int(port_raw)
+    except ValueError:
+        smtp_port = 465
+
+    if smtp_host.lower() == "smtp.gmail.com" and " " in email_password and len(email_password.replace(" ", "")) == 16:
+        email_password = email_password.replace(" ", "")
+
+    has_chart = bool(chart_path and os.path.isfile(chart_path))
+    raw_cid = make_msgid(domain="tablero.local") if has_chart else None
+    clean_cid = raw_cid.strip("<>") if raw_cid else None
+
+    subject, plain_text, html_body = format_email_report(
+        alerts=alerts,
+        brief=brief,
+        date_str=date_str,
+        summary_df=summary_df,
+        dashboard_url=dashboard_url,
+        chart_cid=clean_cid,
+    )
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = email_from
+    msg["To"] = ", ".join(recipients)
+    msg.set_content(plain_text)
+    msg.add_alternative(html_body, subtype="html")
+
+    if has_chart and raw_cid and chart_path:
+        with open(chart_path, "rb") as img_file:
+            img_bytes = img_file.read()
+        html_part = msg.get_payload()[1]
+        html_part.add_related(
+            img_bytes,
+            maintype="image",
+            subtype="png",
+            cid=raw_cid,
+            filename=os.path.basename(chart_path),
+        )
+
+    context = ssl.create_default_context()
+    try:
+        if smtp_port == 465:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=15) as server:
+                server.login(email_from, email_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+                server.ehlo()
+                server.starttls(context=context)
+                server.ehlo()
+                server.login(email_from, email_password)
+                server.send_message(msg)
+        print(f"[INFO] Reporte diario enviado por Email a {len(recipients)} destinatario(s).")
+        return True
+    except Exception as exc:
+        print(f"[WARN] No se pudo enviar Email: {exc}")
+        return False
+
+
 def send_optional_alerts(
     alerts: list[dict[str, str]],
     brief: list[str],
     date_str: str,
     summary_df: pd.DataFrame | None = None,
     dashboard_url: str | None = None,
+    chart_path: str | None = None,
 ) -> bool:
-    """Send daily WhatsApp report (Twilio/Webhook) and actionable Slack/Telegram alerts."""
+    """Send daily Email / WhatsApp reports and actionable Slack / Telegram alerts."""
     actionable = [a for a in alerts if a["severity"] in ("high", "medium")]
     resolved_url = _resolve_dashboard_url(dashboard_url)
     sent = False
 
-    # 1) Slack & Telegram: actionable alerts only (HIGH / MEDIUM)
+    # 1) Email (Gmail / SMTP): daily executive report with table, chart & alerts
+    if _send_email_report(
+        alerts=alerts,
+        brief=brief,
+        date_str=date_str,
+        summary_df=summary_df,
+        dashboard_url=resolved_url,
+        chart_path=chart_path,
+    ):
+        sent = True
+
+    # 2) Slack & Telegram: actionable alerts only (HIGH / MEDIUM)
     if actionable:
         lines = [f"📊 Monitor Macro UY/LatAm — {date_str}", ""]
         for a in actionable[:5]:
@@ -594,7 +854,11 @@ def send_optional_alerts(
             except Exception as exc:
                 print(f"[WARN] No se pudo enviar alerta a Telegram: {exc}")
 
-    # 2) WhatsApp (Twilio / External Webhook): daily weekday brief + alerts
+    # 3) WhatsApp (CallMeBot / Twilio / External Webhook): daily weekday brief + alerts
+    has_callmebot = bool(
+        os.environ.get("CALLMEBOT_PHONE", "").strip()
+        and os.environ.get("CALLMEBOT_APIKEY", "").strip()
+    )
     has_twilio = bool(
         os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
         and os.environ.get("TWILIO_AUTH_TOKEN", "").strip()
@@ -602,7 +866,7 @@ def send_optional_alerts(
     )
     has_wa_webhook = bool(os.environ.get("WHATSAPP_WEBHOOK_URL", "").strip())
 
-    if has_twilio or has_wa_webhook:
+    if has_callmebot or has_twilio or has_wa_webhook:
         wa_msg = format_whatsapp_report(
             alerts=alerts,
             brief=brief,
@@ -610,6 +874,21 @@ def send_optional_alerts(
             summary_df=summary_df,
             dashboard_url=resolved_url,
         )
+        if has_callmebot:
+            cmb_msg = (
+                wa_msg
+                if len(wa_msg) <= 1150
+                else format_whatsapp_report(
+                    alerts=alerts,
+                    brief=brief,
+                    date_str=date_str,
+                    summary_df=summary_df,
+                    dashboard_url=resolved_url,
+                    max_chars=1150,
+                )
+            )
+            if _send_callmebot_whatsapp(cmb_msg):
+                sent = True
         if has_twilio and _send_twilio_whatsapp(wa_msg):
             sent = True
         if has_wa_webhook and _send_whatsapp_webhook(wa_msg, date_str, actionable, resolved_url):
