@@ -62,6 +62,8 @@ def test_format_markdown_summary_columns():
         "Var 5D",
         "YTD",
         "1A",
+        "Vol 20D",
+        "Z-Score 1D",
         "Rango 52S",
     ]
 

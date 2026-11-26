@@ -1,4 +1,7 @@
+import html
+import json
 import os
+import re
 from datetime import datetime, timezone
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -13,7 +16,11 @@ try:
     from analyze import (
         compute_correlations,
         compute_summary_metrics,
+        detect_alerts,
         format_markdown_summary,
+        generate_morning_brief,
+        save_history_snapshot,
+        send_optional_alerts,
     )
     from extract import (
         ASSET_METADATA,
@@ -25,7 +32,11 @@ except ImportError:
     from src.analyze import (
         compute_correlations,
         compute_summary_metrics,
+        detect_alerts,
         format_markdown_summary,
+        generate_morning_brief,
+        save_history_snapshot,
+        send_optional_alerts,
     )
     from src.extract import (
         ASSET_METADATA,
@@ -37,12 +48,15 @@ except ImportError:
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_IMG = os.path.join(BASE_DIR, "output", "macro_dashboard.png")
 OUTPUT_HTML = os.path.join(BASE_DIR, "docs", "index.html")
+HISTORY_CSV = os.path.join(BASE_DIR, "data", "macro_history.csv")
 README_PATH = os.path.join(BASE_DIR, "README.md")
 
 FX_STYLES = {
     "USD/UYU": {"color": "#1d4ed8", "ls": "-", "dash": "solid", "lw": 2.3, "label": "USD/UYU"},
-    "USD/BRL": {"color": "#d97706", "ls": "-", "dash": "solid", "lw": 2.0, "label": "USD/BRL"},
-    "USD/ARS": {"color": "#0f766e", "ls": "-", "dash": "solid", "lw": 1.8, "label": "USD/ARS (Oficial)"},
+    "USD/BRL": {"color": "#d97706", "ls": "-", "dash": "solid", "lw": 1.9, "label": "USD/BRL"},
+    "BRL/UYU": {"color": "#0891b2", "ls": "-", "dash": "solid", "lw": 2.0, "label": "BRL/UYU (UYU/Real)"},
+    "USD/ARS": {"color": "#4d7c0f", "ls": "-", "dash": "solid", "lw": 1.8, "label": "USD/ARS (Oficial)"},
+    "UI (BCU)": {"color": "#64748b", "ls": ":", "dash": "dot", "lw": 2.0, "label": "UI BCU (Inflación)"},
     "DXY": {"color": "#db2777", "ls": "-", "dash": "solid", "lw": 2.5, "label": "DXY (Global)"},
 }
 
@@ -59,7 +73,7 @@ def _place_end_labels(ax, x_pos, entries: list[tuple[float, str, str]]) -> None:
         return
     ymin, ymax = ax.get_ylim()
     span = max(ymax - ymin, 1e-6)
-    min_sep = span * 0.085
+    min_sep = min(span * 0.085, span / (len(entries) + 1.5))
 
     sorted_entries = sorted(entries, key=lambda item: item[0])
     placed_y: list[float] = []
@@ -69,7 +83,6 @@ def _place_end_labels(ax, x_pos, entries: list[tuple[float, str, str]]) -> None:
             y = placed_y[-1] + min_sep
         placed_y.append(y)
 
-    # Pull down slightly if top label exceeds axis ceiling
     if placed_y[-1] > ymax - span * 0.04:
         shift = placed_y[-1] - (ymax - span * 0.04)
         placed_y = [y - shift for y in placed_y]
@@ -82,10 +95,18 @@ def _place_end_labels(ax, x_pos, entries: list[tuple[float, str, str]]) -> None:
             textcoords="offset points",
             va="center",
             ha="left",
-            fontsize=8.5,
+            fontsize=8.2,
             fontweight="bold",
             color=color,
         )
+
+
+def _markdown_inline_to_html(text: str) -> str:
+    """Safely convert simple **bold** and `code` markers into HTML."""
+    escaped = html.escape(text)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"`(.+?)`", r"<code>\1</code>", escaped)
+    return escaped
 
 
 def generate_chart(
@@ -100,8 +121,8 @@ def generate_chart(
     fig, axes = plt.subplots(
         2,
         2,
-        figsize=(16, 10.5),
-        gridspec_kw={"hspace": 0.36, "wspace": 0.24},
+        figsize=(16.5, 10.8),
+        gridspec_kw={"hspace": 0.36, "wspace": 0.25},
     )
     ax_fx, ax_drv = axes[0, 0], axes[0, 1]
     ax_bar, ax_corr = axes[1, 0], axes[1, 1]
@@ -109,11 +130,11 @@ def generate_chart(
     last_date = df.index.max()
     date_span = last_date - df.index.min()
 
-    # 1) Panel FX vs DXY (% acumulado 1A)
-    fx_cols = [c for c in FX_ASSETS if c in df.columns]
-    fx_pct = (df[fx_cols] / df[fx_cols].iloc[0] - 1.0) * 100.0
+    # 1) Panel FX, BRL/UYU, UI (BCU) vs DXY (% acumulado 1A)
+    fx_panel_cols = [c for c in [*FX_ASSETS, "UI (BCU)"] if c in df.columns]
+    fx_pct = (df[fx_panel_cols] / df[fx_panel_cols].iloc[0] - 1.0) * 100.0
     end_labels_fx = []
-    for col in fx_cols:
+    for col in fx_panel_cols:
         st = FX_STYLES[col]
         ax_fx.plot(
             fx_pct.index,
@@ -127,14 +148,14 @@ def generate_chart(
         end_labels_fx.append((end_val, f"{col} {end_val:+.1f}%", st["color"]))
 
     ax_fx.axhline(0, color="#9ca3af", linestyle=":", linewidth=1.1)
-    ax_fx.set_title("1. Presión Cambiaria vs. Dólar Global (% Acum. 1A)", fontweight="bold", fontsize=11.5, pad=10)
+    ax_fx.set_title("1. Presión Cambiaria, BRL/UYU y UI BCU (% Acum. 1A)", fontweight="bold", fontsize=11.5, pad=10)
     ax_fx.set_ylabel("Variación acumulada (%)")
     ax_fx.yaxis.set_major_formatter(mtick.PercentFormatter(decimals=0))
     ax_fx.xaxis.set_major_formatter(mdates.DateFormatter("%b %y"))
-    ax_fx.set_xlim(df.index.min(), last_date + pd.Timedelta(days=max(int(date_span.days * 0.23), 24)))
+    ax_fx.set_xlim(df.index.min(), last_date + pd.Timedelta(days=max(int(date_span.days * 0.25), 26)))
     last_num = mdates.date2num(last_date)
     ax_fx.set_xticks([t for t in ax_fx.get_xticks() if mdates.date2num(df.index.min()) <= t <= last_num])
-    ax_fx.legend(loc="upper left", frameon=True, facecolor="white", framealpha=0.9, fontsize=8.5)
+    ax_fx.legend(loc="upper left", ncol=2, frameon=True, facecolor="white", framealpha=0.92, fontsize=8.0)
     _place_end_labels(ax_fx, last_date, end_labels_fx)
 
     # 2) Panel Drivers Globales: Commodities (% acum) + US 10Y Yield (%)
@@ -179,17 +200,20 @@ def generate_chart(
         ax_rate.grid(False)
 
     labels_drv = [l.get_label() for l in lines_drv]
-    ax_drv.legend(lines_drv, labels_drv, loc="upper left", frameon=True, facecolor="white", framealpha=0.9, fontsize=8.5)
+    ax_drv.legend(lines_drv, labels_drv, loc="upper left", frameon=True, facecolor="white", framealpha=0.92, fontsize=8.5)
 
     # 3) Panel Desempeño YTD (%) y posición en rango 52S
     price_rows = summary_df[~summary_df["is_rate"]].sort_values("var_ytd_num", ascending=True)
     y_vals = price_rows["var_ytd_num"].to_numpy()
-    colors_bar = ["#2563eb" if v >= 0 else "#dc2626" for v in y_vals]
-    bars = ax_bar.barh(price_rows["Activo"], y_vals, color=colors_bar, height=0.58, alpha=0.9)
+    colors_bar = [
+        "#64748b" if bool(is_idx) else ("#2563eb" if v >= 0 else "#dc2626")
+        for v, is_idx in zip(y_vals, price_rows["is_index"])
+    ]
+    bars = ax_bar.barh(price_rows["Activo"], y_vals, color=colors_bar, height=0.62, alpha=0.9)
     ax_bar.axvline(0, color="#4b5563", linewidth=1.1)
 
     max_abs = max(float(np.abs(y_vals).max()) if len(y_vals) else 10.0, 5.0)
-    ax_bar.set_xlim(-max_abs * 1.45, max_abs * 1.55)
+    ax_bar.set_xlim(-max_abs * 1.48, max_abs * 1.58)
     ax_bar.xaxis.set_major_formatter(mtick.PercentFormatter(decimals=0))
     ax_bar.set_title("3. Desempeño YTD (%) y Posición en Rango 52S", fontweight="bold", fontsize=11.5, pad=10)
     ax_bar.set_xlabel("Variación Año Corrido (%)")
@@ -200,13 +224,14 @@ def generate_chart(
         offset = max_abs * 0.04
         x_txt = val + offset if val >= 0 else val - offset
         ha = "left" if val >= 0 else "right"
+        suffix = " [Índice]" if bool(row["is_index"]) else f" [52S: {pos:.0f}%]"
         ax_bar.text(
             x_txt,
             bar.get_y() + bar.get_height() / 2.0,
-            f"{val:+.1f}%  [52S: {pos:.0f}%]",
+            f"{val:+.1f}%{suffix}",
             va="center",
             ha=ha,
-            fontsize=8.5,
+            fontsize=8.2,
             fontweight="bold",
             color="#1f2937",
         )
@@ -220,13 +245,13 @@ def generate_chart(
             f"US 10Y Yield: {r0['Último']:.2f}%  |  YTD: {r0['YTD']}  |  52S: {r0['pos_52w_pct']:.0f}%",
             transform=ax_bar.transAxes,
             ha="right",
-            fontsize=8.5,
+            fontsize=8.3,
             fontweight="bold",
             color="#5b21b6",
             bbox=dict(boxstyle="round,pad=0.35", facecolor="#f5f3ff", edgecolor="#c4b5fd"),
         )
 
-    # 4) Panel Heatmap triangular inferior de correlaciones (sin fila/columna vacías)
+    # 4) Panel Heatmap triangular inferior de correlaciones
     corr_sub = corr_matrix.iloc[1:, :-1] if len(corr_matrix) > 1 else corr_matrix
     mask = np.triu(np.ones_like(corr_sub, dtype=bool), k=1) if len(corr_matrix) > 1 else None
     sns.heatmap(
@@ -250,7 +275,7 @@ def generate_chart(
     ax_corr.tick_params(axis="y", rotation=0)
 
     fig.suptitle(
-        "Tablero Macroeconómico Regional — Uruguay / LatAm & Drivers Globales",
+        "Monitor Macro & Riesgo Cambiario V2 — Uruguay / LatAm & Drivers Globales",
         fontsize=15,
         fontweight="bold",
         y=0.97,
@@ -259,17 +284,17 @@ def generate_chart(
     fig.text(
         0.5,
         0.935,
-        f"Cierre al {last_date.strftime('%Y-%m-%d')}  •  Precios en variación % | Tasa US 10Y en puntos básicos (bps)",
+        f"Cierre al {last_date.strftime('%Y-%m-%d')}  •  Precios en % | Tasa US 10Y en bps | Datos locales BCU",
         ha="center",
         fontsize=10,
         color="#4b5563",
     )
     fig.text(
         0.5,
-        0.015,
-        "Fuente: Yahoo Finance (yfinance) • USD/ARS refleja tipo de cambio oficial (ARS=X) • Correlación: retorno % en precios y cambio diario en tasa US 10Y",
+        0.014,
+        "Fuentes: Yahoo Finance (yfinance) & BCU vía datosUruguay.com (CC-BY-4.0) • USD/ARS oficial (ARS=X) • UI excluida de correlaciones diarias",
         ha="center",
-        fontsize=8.5,
+        fontsize=8.3,
         color="#6b7280",
     )
 
@@ -287,9 +312,7 @@ def _padded_range(values: np.ndarray, pad_frac: float = 0.14, min_pad: float = 1
 
 
 def _build_html_table(summary_df: pd.DataFrame) -> str:
-    """Render a clean responsive executive HTML table without overlapping legends."""
-    import html
-
+    """Render a clean responsive executive HTML table."""
     disp = format_markdown_summary(summary_df)
     headers = "".join(
         f'<th class="{"num" if i >= 2 else "txt"}">{html.escape(str(col))}</th>'
@@ -304,12 +327,10 @@ def _build_html_table(summary_df: pd.DataFrame) -> str:
             if i < 2:
                 cls = "txt fw" if i == 0 else "txt muted"
             elif col in ("Var 1D", "Var 5D", "YTD", "1A"):
-                if val.startswith("+"):
-                    cls = "num pos"
-                elif val.startswith("-"):
-                    cls = "num neg"
-                else:
-                    cls = "num"
+                cls = "num pos" if val.startswith("+") else ("num neg" if val.startswith("-") else "num")
+            elif col == "Z-Score 1D":
+                is_anom = val not in ("n/a",) and abs(float(val.replace("σ", ""))) >= 2.0
+                cls = "num anom" if is_anom else "num"
             else:
                 cls = "num"
             cells.append(f'<td class="{cls}">{esc}</td>')
@@ -325,13 +346,68 @@ def _build_html_table(summary_df: pd.DataFrame) -> str:
     )
 
 
+def _build_brief_and_alerts_html(brief: list[str], alerts: list[dict[str, str]]) -> str:
+    """Render Morning Brief bullets and actionable alert cards."""
+    brief_items = "".join(f"<li>{_markdown_inline_to_html(b)}</li>" for b in brief)
+
+    alert_cards = []
+    for a in alerts[:5]:
+        sev = a.get("severity", "info")
+        sev_label = {"high": "ALTA", "medium": "MEDIA", "info": "INFO"}.get(sev, "INFO")
+        alert_cards.append(
+            f'<div class="alert-item sev-{html.escape(sev)}">'
+            f'<div class="alert-top"><span class="badge">{sev_label}</span>'
+            f'<strong>{html.escape(a["title"])}</strong></div>'
+            f'<div class="alert-detail">{html.escape(a["detail"])}</div>'
+            f'<div class="alert-action">Acción sugerida: {html.escape(a["action"])}</div>'
+            "</div>"
+        )
+
+    return f"""
+    <section class="exec-grid">
+      <div class="card">
+        <h2>📝 Morning Brief Ejecutivo</h2>
+        <ul class="brief-list">{brief_items}</ul>
+      </div>
+      <div class="card">
+        <h2>🚨 Radar de Alertas y Desvíos</h2>
+        <div class="alert-list">{''.join(alert_cards)}</div>
+      </div>
+    </section>
+    """
+
+
+def _build_simulator_payload(summary_df: pd.DataFrame) -> dict:
+    """Build market return lookup for the client-side business margin simulator."""
+    by_name = summary_df.set_index("Activo")
+
+    def _get(asset: str) -> dict[str, float]:
+        if asset not in by_name.index:
+            return {"5d": 0.0, "ytd": 0.0, "1y": 0.0}
+        row = by_name.loc[asset]
+        return {
+            "5d": float(row["var_5d_num"]),
+            "ytd": float(row["var_ytd_num"]),
+            "1y": float(row["var_1y_num"]),
+        }
+
+    return {
+        "usd_uyu": _get("USD/UYU"),
+        "brl_uyu": _get("BRL/UYU"),
+        "ui_bcu": _get("UI (BCU)"),
+    }
+
+
 def generate_interactive_dashboard(
     df: pd.DataFrame,
     summary_df: pd.DataFrame,
     corr_matrix: pd.DataFrame,
+    alerts: list[dict[str, str]],
+    brief: list[str],
+    sources: dict[str, str],
     output_path: str = OUTPUT_HTML,
 ) -> None:
-    """Generate a self-contained interactive Plotly HTML dashboard with clean card layout."""
+    """Generate V2 self-contained interactive Plotly + business simulator HTML dashboard."""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     last_date_str = df.index.max().strftime("%Y-%m-%d")
 
@@ -344,9 +420,9 @@ def generate_interactive_dashboard(
     ]
     plot_config = {"responsive": True, "displaylogo": False}
 
-    # --- 1) FX vs DXY ---
+    # --- 1) FX + BRL/UYU + UI vs DXY ---
     fig_fx = go.Figure()
-    fx_cols = [c for c in FX_ASSETS if c in df.columns]
+    fx_cols = [c for c in [*FX_ASSETS, "UI (BCU)"] if c in df.columns]
     fx_pct = (df[fx_cols] / df[fx_cols].iloc[0] - 1.0) * 100.0
     for col in fx_cols:
         st = FX_STYLES[col]
@@ -362,18 +438,24 @@ def generate_interactive_dashboard(
                 customdata=custom,
                 hovertemplate=(
                     f"<b>{st['label']}</b>: %{{y:+.2f}}%<br>"
-                    "Spot: %{customdata[0]:.2f} %{customdata[1]}<extra></extra>"
+                    "Valor: %{customdata[0]:.3f} %{customdata[1]}<extra></extra>"
                 ),
             )
         )
     fig_fx.add_hline(y=0, line_dash="dot", line_color="#9ca3af", line_width=1.1)
     fig_fx.update_layout(
-        title=dict(text="<b>1. Presión Cambiaria vs. Dólar Global (% Acum. 1A)</b>", x=0.01, y=0.96, yanchor="top", font=dict(size=14)),
+        title=dict(
+            text="<b>1. Presión Cambiaria, BRL/UYU y UI BCU (% Acum. 1A)</b>",
+            x=0.01,
+            y=0.96,
+            yanchor="top",
+            font=dict(size=14),
+        ),
         template="plotly_white",
-        height=455,
-        margin=dict(t=122, l=72, r=24, b=54),
+        height=465,
+        margin=dict(t=130, l=72, r=24, b=54),
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.15, xanchor="left", x=0.0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.14, xanchor="left", x=0.0),
         xaxis=dict(
             rangeselector=dict(buttons=range_buttons, bgcolor="#f1f5f9", activecolor="#1d4ed8", y=1.02),
             ticklabelstandoff=6,
@@ -435,12 +517,18 @@ def generate_interactive_dashboard(
 
     fig_drv.add_hline(y=0, line_dash="dot", line_color="#9ca3af", line_width=1.1, secondary_y=False)
     fig_drv.update_layout(
-        title=dict(text="<b>2. Drivers Globales: Commodities (% Acum.) y Tasa US 10Y (%)</b>", x=0.01, y=0.96, yanchor="top", font=dict(size=14)),
+        title=dict(
+            text="<b>2. Drivers Globales: Commodities (% Acum.) y Tasa US 10Y (%)</b>",
+            x=0.01,
+            y=0.96,
+            yanchor="top",
+            font=dict(size=14),
+        ),
         template="plotly_white",
-        height=455,
-        margin=dict(t=122, l=72, r=72, b=54),
+        height=465,
+        margin=dict(t=130, l=72, r=72, b=54),
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.15, xanchor="left", x=0.0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.14, xanchor="left", x=0.0),
         xaxis=dict(
             rangeselector=dict(buttons=range_buttons, bgcolor="#f1f5f9", activecolor="#1d4ed8", y=1.02),
             ticklabelstandoff=6,
@@ -456,7 +544,7 @@ def generate_interactive_dashboard(
         secondary_y=False,
     )
 
-    # --- 3) Ranking Interactivo por Horizonte ---
+    # --- 3) Ranking Interactivo por Horizonte + Anomalía Z-Score ---
     fig_bar = go.Figure()
     price_summary = summary_df[~summary_df["is_rate"]].copy()
     horizons = [
@@ -465,17 +553,30 @@ def generate_interactive_dashboard(
         ("1 Día (%)", "var_1d_num", "%"),
         ("1 Año (%)", "var_1y_num", "%"),
         ("Posición 52S (%)", "pos_52w_pct", "%"),
+        ("Z-Score 1D (σ)", "z_score_1d", "σ"),
     ]
     horizon_ranges: list[list[float]] = []
     for idx, (label, col_key, suffix) in enumerate(horizons):
-        ordered = price_summary.sort_values(col_key, ascending=True)
+        subset = price_summary[~price_summary["is_index"]].copy() if col_key == "z_score_1d" else price_summary
+        ordered = subset.sort_values(col_key, ascending=True)
         vals = ordered[col_key].to_numpy(dtype=float)
+
         if col_key == "pos_52w_pct":
             colors = ["#0ea5e9" for _ in vals]
             text_vals = [f"{v:.0f}% (52S)" for v in vals]
             x_range = [0.0, 122.0]
+        elif col_key == "z_score_1d":
+            colors = ["#b91c1c" if abs(v) >= 2.0 else "#475569" for v in vals]
+            text_vals = [f"{v:+.2f}σ" for v in vals]
+            vmin = min(-2.5, float(vals.min()))
+            vmax = max(2.5, float(vals.max()))
+            span = max(vmax - vmin, 4.0)
+            x_range = [vmin - span * 0.25, vmax + span * 0.25]
         else:
-            colors = ["#2563eb" if v >= 0 else "#dc2626" for v in vals]
+            colors = [
+                "#64748b" if bool(is_idx) else ("#2563eb" if v >= 0 else "#dc2626")
+                for v, is_idx in zip(vals, ordered["is_index"])
+            ]
             text_vals = [f"{v:+.2f}{suffix}" for v in vals]
             vmin = min(0.0, float(vals.min()))
             vmax = max(0.0, float(vals.max()))
@@ -500,8 +601,8 @@ def generate_interactive_dashboard(
                 customdata=np.column_stack([ordered["Último"], ordered["Rango 52S"]]),
                 hovertemplate=(
                     "<b>%{y}</b><br>"
-                    f"{label}: <b>%{{x:+.2f}}%</b><br>"
-                    "Último: %{customdata[0]:.2f}<br>"
+                    f"{label}: <b>%{{x:+.2f}}{suffix}</b><br>"
+                    "Último: %{customdata[0]:.3f}<br>"
                     "Rango 52S: %{customdata[1]}<extra></extra>"
                 ),
             )
@@ -514,7 +615,10 @@ def generate_interactive_dashboard(
             method="update",
             args=[
                 {"visible": [i == idx for i in range(len(horizons))]},
-                {"xaxis.range": horizon_ranges[idx]},
+                {
+                    "xaxis.range": horizon_ranges[idx],
+                    "xaxis.ticksuffix": horizons[idx][2],
+                },
             ],
         )
         for idx, (label, _, _) in enumerate(horizons)
@@ -524,11 +628,11 @@ def generate_interactive_dashboard(
     rate_note = ""
     if not rate_rows.empty:
         r0 = rate_rows.iloc[0]
-        rate_note = f"US 10Y Yield (en bps): {r0['Último']:.2f}% | 1D: {r0['Var 1D']} | YTD: {r0['YTD']} | 52S: {r0['pos_52w_pct']:.0f}%"
+        rate_note = f"US 10Y Yield (bps): {r0['Último']:.2f}% | 1D: {r0['Var 1D']} | YTD: {r0['YTD']} | Z: {r0['Z-Score 1D']}"
 
     fig_bar.update_layout(
         title=dict(
-            text=f"<b>3. Ranking de Desempeño Interactivo</b><br><sup>{rate_note}</sup>",
+            text=f"<b>3. Ranking de Desempeño y Anomalías</b><br><sup>{rate_note}</sup>",
             x=0.01,
             font=dict(size=14),
         ),
@@ -538,7 +642,7 @@ def generate_interactive_dashboard(
                 direction="right",
                 active=0,
                 x=0.0,
-                y=1.14,
+                y=1.15,
                 xanchor="left",
                 yanchor="top",
                 bgcolor="#f1f5f9",
@@ -547,8 +651,8 @@ def generate_interactive_dashboard(
             )
         ],
         template="plotly_white",
-        height=440,
-        margin=dict(t=108, l=95, r=28, b=48),
+        height=465,
+        margin=dict(t=115, l=100, r=28, b=48),
         xaxis=dict(range=horizon_ranges[0], ticksuffix="%", ticklabelstandoff=6),
         yaxis=dict(ticklabelstandoff=8, automargin=True),
     )
@@ -571,31 +675,37 @@ def generate_interactive_dashboard(
     )
     fig_corr.update_layout(
         title=dict(
-            text="<b>4. Correlación de Cambios Diarios (Últimos 60 Días Hábiles)</b><br><sup>Precios: retorno % | Tasa US 10Y: cambio diario (p.p.)</sup>",
+            text="<b>4. Correlación de Cambios Diarios (Últimos 60 Días Hábiles)</b><br><sup>Precios: retorno % | US 10Y: cambio diario (p.p.) | UI BCU excluida</sup>",
             x=0.01,
             y=0.96,
             yanchor="top",
             font=dict(size=14),
         ),
         template="plotly_white",
-        height=455,
-        margin=dict(t=88, l=100, r=75, b=78),
+        height=465,
+        margin=dict(t=88, l=102, r=75, b=82),
         xaxis=dict(tickangle=-30, ticklabelstandoff=6, automargin=True),
         yaxis=dict(autorange="reversed", ticklabelstandoff=8, automargin=True),
     )
 
+    html_brief_alerts = _build_brief_and_alerts_html(brief, alerts)
     html_table = _build_html_table(summary_df)
     div_fx = fig_fx.to_html(full_html=False, include_plotlyjs="cdn", config=plot_config)
     div_drv = fig_drv.to_html(full_html=False, include_plotlyjs=False, config=plot_config)
     div_bar = fig_bar.to_html(full_html=False, include_plotlyjs=False, config=plot_config)
     div_corr = fig_corr.to_html(full_html=False, include_plotlyjs=False, config=plot_config)
 
+    sim_payload_json = json.dumps(_build_simulator_payload(summary_df))
+    csv_export_text = df.to_csv(float_format="%.4f")
+    csv_payload_json = json.dumps(csv_export_text)
+    source_summary = " • ".join(f"{k}: {v}" for k, v in sources.items())
+
     html_doc = f"""<!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Tablero Macroeconómico Regional — Uruguay / LatAm</title>
+  <title>Monitor Macro & Riesgo Cambiario V2 — Uruguay / LatAm</title>
   <style>
     :root {{
       --bg: #f8fafc;
@@ -607,6 +717,8 @@ def generate_interactive_dashboard(
       --pos-bg: #eff6ff;
       --neg: #b91c1c;
       --neg-bg: #fef2f2;
+      --warn: #b45309;
+      --warn-bg: #fffbeb;
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -617,34 +729,99 @@ def generate_interactive_dashboard(
       color: var(--ink);
       line-height: 1.45;
     }}
-    main {{ max-width: 1440px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }}
+    main {{ max-width: 1460px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }}
     header {{
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 18px 22px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
     }}
     header h1 {{ margin: 0 0 4px; font-size: 1.35rem; }}
-    header p {{ margin: 0; color: var(--muted); font-size: 0.92rem; }}
+    header p {{ margin: 0; color: var(--muted); font-size: 0.9rem; }}
+    .btn-primary {{
+      background: #0f172a;
+      color: #ffffff;
+      border: none;
+      border-radius: 8px;
+      padding: 9px 14px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+    }}
+    .btn-primary:hover {{ background: #1e293b; }}
     .card {{
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 14px 16px;
+      padding: 16px 18px;
       box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
       overflow: hidden;
     }}
-    .card h2 {{ margin: 0 0 10px; font-size: 1rem; color: var(--ink); }}
+    .card h2 {{ margin: 0 0 12px; font-size: 1.02rem; color: var(--ink); }}
+    .exec-grid, .grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }}
+    .brief-list {{ margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 0.92rem; }}
+    .brief-list code {{ background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }}
+    .alert-list {{ display: flex; flex-direction: column; gap: 8px; }}
+    .alert-item {{ border-radius: 8px; padding: 9px 12px; border-left: 4px solid; font-size: 0.88rem; }}
+    .sev-high {{ background: var(--neg-bg); border-color: var(--neg); }}
+    .sev-medium {{ background: var(--warn-bg); border-color: var(--warn); }}
+    .sev-info {{ background: var(--pos-bg); border-color: var(--pos); }}
+    .alert-top {{ display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }}
+    .badge {{
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(15, 23, 42, 0.08);
+    }}
+    .alert-detail {{ color: var(--muted); }}
+    .alert-action {{ margin-top: 2px; font-weight: 500; }}
+    .sim-toolbar {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }}
+    .sim-btn {{
+      background: #f1f5f9;
+      color: var(--ink);
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 6px 11px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }}
+    .sim-btn.active {{ background: #1d4ed8; color: #ffffff; border-color: #1d4ed8; }}
+    .sim-body {{
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 16px;
+      align-items: start;
+    }}
+    .sim-group {{ background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 12px; }}
+    .sim-group h3 {{ margin: 0 0 10px; font-size: 0.9rem; }}
+    .sim-row {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 8px; font-size: 0.86rem; }}
+    .sim-row input[type="number"] {{ width: 72px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 6px; text-align: right; }}
+    .sim-note {{ font-size: 0.78rem; color: var(--muted); margin-top: 4px; }}
+    .kpi-grid {{ display: grid; grid-template-columns: 1fr; gap: 8px; }}
+    .kpi {{ border-radius: 8px; padding: 10px 12px; border: 1px solid var(--border); background: #ffffff; }}
+    .kpi-lbl {{ font-size: 0.78rem; color: var(--muted); }}
+    .kpi-val {{ font-size: 1.25rem; font-weight: 700; margin-top: 2px; }}
     .table-wrap {{ overflow-x: auto; }}
-    table {{ width: 100%; border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 0.88rem; font-variant-numeric: tabular-nums; }}
     th {{
       background: #0f172a;
       color: #ffffff;
       font-weight: 600;
-      padding: 9px 12px;
+      padding: 9px 10px;
       white-space: nowrap;
     }}
-    td {{ padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }}
+    td {{ padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }}
     tbody tr:nth-child(even) {{ background: #f8fafc; }}
     th.txt, td.txt {{ text-align: left; }}
     th.num, td.num {{ text-align: right; }}
@@ -652,34 +829,162 @@ def generate_interactive_dashboard(
     td.muted {{ color: var(--muted); }}
     td.pos {{ color: var(--pos); background: var(--pos-bg); font-weight: 600; }}
     td.neg {{ color: var(--neg); background: var(--neg-bg); font-weight: 600; }}
-    .grid {{
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 18px;
-    }}
+    td.anom {{ color: var(--warn); background: var(--warn-bg); font-weight: 700; }}
+    footer {{ text-align: center; color: var(--muted); font-size: 0.82rem; padding: 6px 0; }}
     @media (max-width: 1024px) {{
       body {{ padding: 14px; }}
-      .grid {{ grid-template-columns: 1fr; }}
+      .exec-grid, .grid, .sim-body {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
 <body>
   <main>
     <header>
-      <h1>🌎 Tablero Macroeconómico Interactivo — Uruguay / LatAm</h1>
-      <p>Cierre al <strong>{last_date_str}</strong> • Fuente: Yahoo Finance (yfinance) • Hacé clic en la leyenda para aislar series o usá los filtros temporales</p>
+      <div>
+        <h1>🌎 Monitor Macro &amp; Riesgo Cambiario V2 — Uruguay / LatAm</h1>
+        <p>Cierre al <strong>{html.escape(last_date_str)}</strong> • Alertas estadísticas, cruce BRL/UYU, UI BCU y simulador de impacto en márgenes</p>
+      </div>
+      <button type="button" class="btn-primary" id="download-csv-btn">📥 Descargar Histórico CSV</button>
     </header>
+
+    {html_brief_alerts}
+
     <section class="card">
-      <h2>Resumen Ejecutivo de Mercado (Precios en % • Tasa US 10Y en bps)</h2>
+      <h2>🧮 Simulador de Impacto Cambiario en Costos y Márgenes</h2>
+      <div class="sim-toolbar">
+        <span style="font-size:0.86rem;font-weight:600;color:#475569;">Perfil empresa:</span>
+        <button type="button" class="sim-btn active" data-preset="importadora">Importadora UY</button>
+        <button type="button" class="sim-btn" data-preset="exportadora">Exportadora UY</button>
+        <button type="button" class="sim-btn" data-preset="brasil">Competencia Brasil</button>
+        <span style="font-size:0.86rem;font-weight:600;color:#475569;margin-left:12px;">Horizonte:</span>
+        <select id="sim-horizon" style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.86rem;">
+          <option value="5d">Últimos 5 días</option>
+          <option value="ytd" selected>Año corrido (YTD)</option>
+          <option value="1y">Último año (1A)</option>
+        </select>
+      </div>
+      <div class="sim-body">
+        <div class="sim-group">
+          <h3>Estructura de Costos (% total)</h3>
+          <div class="sim-row"><label for="c-usd">Costos en USD (%)</label><input id="c-usd" type="number" min="0" max="100" value="75" /></div>
+          <div class="sim-row"><label for="c-brl">Costos en BRL (%)</label><input id="c-brl" type="number" min="0" max="100" value="0" /></div>
+          <div class="sim-row"><label for="c-ui">Costos locales en UYU/UI (%)</label><input id="c-ui" type="number" min="0" max="100" value="25" /></div>
+          <div class="sim-note" id="c-sum-note">Suma: 100% (ajustado a pesos uruguayos vía USD/UYU, BRL/UYU y UI BCU)</div>
+        </div>
+        <div class="sim-group">
+          <h3>Estructura de Ingresos (% total)</h3>
+          <div class="sim-row"><label for="r-usd">Ingresos en USD (%)</label><input id="r-usd" type="number" min="0" max="100" value="0" /></div>
+          <div class="sim-row"><label for="r-brl">Ingresos en BRL (%)</label><input id="r-brl" type="number" min="0" max="100" value="0" /></div>
+          <div class="sim-row"><label for="r-uyu">Ingresos en UYU fijos (%)</label><input id="r-uyu" type="number" min="0" max="100" value="100" /></div>
+          <div class="sim-note" id="r-sum-note">Suma: 100% (mide variación en UYU nominal sin reajuste de precios)</div>
+        </div>
+        <div class="kpi-grid">
+          <div class="kpi"><div class="kpi-lbl">Variación estimada de Costos (en UYU)</div><div class="kpi-val" id="kpi-cost">--</div></div>
+          <div class="kpi"><div class="kpi-lbl">Variación estimada de Ingresos (en UYU)</div><div class="kpi-val" id="kpi-rev">--</div></div>
+          <div class="kpi"><div class="kpi-lbl">Efecto neto estimado sobre Margen</div><div class="kpi-val" id="kpi-margin">--</div><div class="sim-note" id="kpi-msg"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>📊 Resumen Ejecutivo de Mercado (Volatilidad 20D, Z-Score y Rango 52S)</h2>
       {html_table}
     </section>
+
     <section class="grid">
       <div class="card">{div_fx}</div>
       <div class="card">{div_drv}</div>
       <div class="card">{div_bar}</div>
       <div class="card">{div_corr}</div>
     </section>
+
+    <footer>
+      Fuentes: {html.escape(source_summary)} • Atribución BCU/UI: Datos de <a href="https://datosuruguay.com" target="_blank" rel="noopener">datosUruguay.com</a> (CC-BY-4.0) • Uso informativo y de análisis.
+    </footer>
   </main>
+
+  <script>
+    const SIM_DATA = {sim_payload_json};
+    const CSV_TEXT = {csv_payload_json};
+    const PRESETS = {{
+      importadora: {{ cUsd: 75, cBrl: 0, cUi: 25, rUsd: 0, rBrl: 0, rUyu: 100 }},
+      exportadora: {{ cUsd: 35, cBrl: 0, cUi: 65, rUsd: 90, rBrl: 0, rUyu: 10 }},
+      brasil:      {{ cUsd: 20, cBrl: 45, cUi: 35, rUsd: 0, rBrl: 0, rUyu: 100 }},
+    }};
+
+    function val(id) {{ return Math.max(0, Number(document.getElementById(id).value) || 0); }}
+
+    function recalcSim() {{
+      const h = document.getElementById("sim-horizon").value;
+      const cUsd = val("c-usd"), cBrl = val("c-brl"), cUi = val("c-ui");
+      const rUsd = val("r-usd"), rBrl = val("r-brl"), rUyu = val("r-uyu");
+      const cSum = cUsd + cBrl + cUi || 1;
+      const rSum = rUsd + rBrl + rUyu || 1;
+
+      document.getElementById("c-sum-note").textContent = "Suma ingresada: " + (cUsd + cBrl + cUi).toFixed(0) + "% (normalizado al 100%)";
+      document.getElementById("r-sum-note").textContent = "Suma ingresada: " + (rUsd + rBrl + rUyu).toFixed(0) + "% (normalizado al 100%)";
+
+      const dUsd = SIM_DATA.usd_uyu[h] || 0;
+      const dBrl = SIM_DATA.brl_uyu[h] || 0;
+      const dUi  = SIM_DATA.ui_bcu[h] || 0;
+
+      const costPct = (cUsd / cSum) * dUsd + (cBrl / cSum) * dBrl + (cUi / cSum) * dUi;
+      const revPct  = (rUsd / rSum) * dUsd + (rBrl / rSum) * dBrl + (rUyu / rSum) * 0;
+      const netEffect = (((1 + revPct / 100) / (1 + costPct / 100)) - 1) * 100;
+
+      const kpiCost = document.getElementById("kpi-cost");
+      const kpiRev = document.getElementById("kpi-rev");
+      const kpiMargin = document.getElementById("kpi-margin");
+      const kpiMsg = document.getElementById("kpi-msg");
+
+      kpiCost.textContent = (costPct >= 0 ? "+" : "") + costPct.toFixed(2) + "%";
+      kpiCost.style.color = costPct > 0 ? "#b91c1c" : "#1d4ed8";
+      kpiRev.textContent = (revPct >= 0 ? "+" : "") + revPct.toFixed(2) + "%";
+      kpiRev.style.color = revPct >= 0 ? "#1d4ed8" : "#b91c1c";
+      kpiMargin.textContent = (netEffect >= 0 ? "+" : "") + netEffect.toFixed(2) + " p.p.";
+      kpiMargin.style.color = netEffect >= 0 ? "#15803d" : "#b91c1c";
+
+      if (netEffect < -1.0) {{
+        kpiMsg.textContent = "Presión negativa sobre margen: evaluar traslado a precios o cobertura cambiaria.";
+      }} else if (netEffect > 1.0) {{
+        kpiMsg.textContent = "Efecto favorable en margen por evolución relativa de ingresos vs. costos.";
+      }} else {{
+        kpiMsg.textContent = "Impacto acotado en el horizonte seleccionado.";
+      }}
+    }}
+
+    document.querySelectorAll(".sim-btn").forEach((btn) => {{
+      btn.addEventListener("click", () => {{
+        document.querySelectorAll(".sim-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        const p = PRESETS[btn.dataset.preset];
+        document.getElementById("c-usd").value = p.cUsd;
+        document.getElementById("c-brl").value = p.cBrl;
+        document.getElementById("c-ui").value = p.cUi;
+        document.getElementById("r-usd").value = p.rUsd;
+        document.getElementById("r-brl").value = p.rBrl;
+        document.getElementById("r-uyu").value = p.rUyu;
+        recalcSim();
+      }});
+    }});
+
+    ["c-usd", "c-brl", "c-ui", "r-usd", "r-brl", "r-uyu", "sim-horizon"].forEach((id) => {{
+      document.getElementById(id).addEventListener("input", recalcSim);
+      document.getElementById(id).addEventListener("change", recalcSim);
+    }});
+
+    document.getElementById("download-csv-btn").addEventListener("click", () => {{
+      const blob = new Blob([CSV_TEXT], {{ type: "text/csv;charset=utf-8;" }});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "macro_history_{html.escape(last_date_str)}.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    }});
+
+    recalcSim();
+  </script>
 </body>
 </html>
 """
@@ -688,17 +993,39 @@ def generate_interactive_dashboard(
         f.write(html_doc)
 
 
-def update_readme(summary_df: pd.DataFrame, readme_path: str = README_PATH) -> None:
-    """Write executive README.md with metrics table, static charts, and technical documentation."""
+def update_readme(
+    summary_df: pd.DataFrame,
+    alerts: list[dict[str, str]],
+    brief: list[str],
+    sources: dict[str, str],
+    readme_path: str = README_PATH,
+) -> None:
+    """Write V2 executive README.md with Morning Brief, alerts, table, charts, and documentation."""
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     markdown_table = format_markdown_summary(summary_df).to_markdown(index=False)
-    content = f"""# 🌎 Tablero Macroeconómico Regional (Uruguay / LatAm)
+    brief_md = "\n".join(f"- {b}" for b in brief)
+    alerts_md = "\n".join(
+        f"- **[{a['severity'].upper()}] {a['title']}:** {a['detail']} *({a['action']})*"
+        for a in alerts[:5]
+    )
+    sources_md = " | ".join(f"**{k}**: {v}" for k, v in sources.items())
 
-Pipeline automatizado en Python que monitorea diariamente las principales variables cambiarias regionales, tasas de referencia de EE. UU. y commodities relevantes para Uruguay y LatAm.
+    content = f"""# 🌎 Monitor Macroeconómico & Riesgo Cambiario V2 (Uruguay / LatAm)
+
+Pipeline automatizado en Python orientado a **decisión financiera y gestión de costos empresariales** en Uruguay y la región: combina mercado internacional (`yfinance`) con datos oficiales del **Banco Central del Uruguay (UI y BRL/UYU)**, detección estadística de anomalías (`Z-Score`), alertas accionables, histórico en CSV y un **simulador interactivo de impacto en márgenes**.
 
 *Última actualización automática: **{timestamp}***
 
-> **📊 Versión interactiva:** abrí [`docs/index.html`](./docs/index.html) en tu navegador (o activá **GitHub Pages → `/docs`** en este repositorio para ver el tablero online con zoom, tooltips, filtros `1M / 3M / 6M / YTD / 1A` y selector de horizonte).
+> **📊 Versión interactiva + Simulador de Márgenes:** abrí [`docs/index.html`](./docs/index.html) (o activá **GitHub Pages → `/docs`** en este repositorio).  
+> **📁 Histórico para Excel / Power BI:** [`data/macro_history.csv`](./data/macro_history.csv)
+
+---
+
+## 📝 Morning Brief Ejecutivo
+{brief_md}
+
+## 🚨 Radar de Alertas del Día
+{alerts_md}
 
 ---
 
@@ -710,31 +1037,32 @@ Pipeline automatizado en Python que monitorea diariamente las principales variab
 
 ---
 
-## ⚙️ Arquitectura del Pipeline
+## ⚙️ Arquitectura V2
 
 ```text
-Yahoo Finance (yfinance)
+Yahoo Finance (yfinance) + BCU vía datosUruguay.com (UI y BRL/UYU)
         │
         ▼
-  src/extract.py   ──▶ Descarga cierres diarios (reintentos + normalización de columnas)
+  src/extract.py   ──▶ Descarga + enriquecimiento local (fallback automático)
         │
         ▼
-  src/analyze.py   ──▶ Precios en % | Tasa US 10Y en bps | YTD vs. cierre año previo | Corr 60d
+  src/analyze.py   ──▶ % / bps, Vol 20D, Z-Score, Alertas, Brief y data/macro_history.csv
         │
         ▼
-  src/report.py    ──▶ Genera output/macro_dashboard.png + docs/index.html + README.md
-        │
+  src/report.py    ──▶ output/macro_dashboard.png + docs/index.html (Simulador) + README.md
+        │              (+ alertas opcionales vía Slack / Telegram en CI)
         ▲
 GitHub Actions (.github/workflows/update_macro.yml — Lun–Vie 21:30 UTC)
 ```
 
 ## 📐 Criterios Metodológicos
 - **Tasas vs. Precios:** `US 10Y Yield` (`^TNX`) reporta variaciones en **puntos básicos (`bps`)**; monedas, índices y commodities reportan variaciones porcentuales (`%`).
-- **Baseline YTD:** calcula el retorno año corrido respecto al **último cierre del año calendario anterior** (si la serie inicia en el año en curso, usa el primer registro disponible).
-- **Correlaciones (60 días hábiles):** se calculan sobre cambios diarios observados sin ceros artificiales por feriados cruzados entre EE. UU. y LatAm (`pct_change()` para precios y `diff()` para la tasa `US 10Y`).
-- **Alcance de fuentes:** los datos provienen de Yahoo Finance (`yfinance`); en particular, `USD/ARS` (`ARS=X`) refleja el tipo de cambio oficial mayorista.
+- **Competitividad Bilateral & Costos Locales:** incorpora `BRL/UYU` (pesos uruguayos por 1 real) y la **Unidad Indexada (`UI BCU`)** para medir brecha real entre dólar e inflación local indexada.
+- **Volatilidad y Anomalías (`Z-Score 1D`):** mide la desviación estándar anualizada de 20 días hábiles y marca movimientos diarios atípicos (`|Z| ≥ 2.0σ`) o rupturas de **Rango 52S**.
+- **Correlaciones (60 días hábiles):** calculadas sobre cambios diarios observados de activos de mercado (`pct_change()` en precios, `diff()` en tasas), excluyendo `UI (BCU)` por ser una interpolación diaria de inflación pasada.
+- **Fuentes y Atribución:** {sources_md}. Datos oficiales del BCU consumidos vía [datosUruguay.com](https://datosuruguay.com) bajo licencia CC-BY-4.0; `USD/ARS` (`ARS=X`) refleja tipo de cambio oficial mayorista.
 
-## 🚀 Ejecución Local
+## 🔔 Alertas Opcionales (Slack / Telegram) y Ejecución Local
 
 ```bash
 python -m venv .venv
@@ -744,18 +1072,26 @@ pytest
 python src/report.py
 ```
 
+Para activar notificaciones automáticas en GitHub Actions cuando haya alertas `HIGH`/`MEDIUM`, configurá en **Settings → Secrets and variables → Actions** cualquiera de estas variables opcionales:
+- `SLACK_WEBHOOK_URL`
+- `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID`
+
 ---
-*Desarrollado con Python (`yfinance`, `pandas`, `matplotlib`, `seaborn`, `plotly`, `pytest`) y automatizado con GitHub Actions.*
+*Desarrollado con Python (`yfinance`, `pandas`, `requests`, `matplotlib`, `seaborn`, `plotly`, `pytest`) y automatizado con GitHub Actions.*
 """
     with open(readme_path, "w", encoding="utf-8") as f:
         f.write(content)
 
 
 if __name__ == "__main__":
-    data, raw_data = fetch_macro_bundle(period="1y")
+    data, raw_data, data_sources = fetch_macro_bundle(period="1y")
+    save_history_snapshot(data, HISTORY_CSV)
     metrics = compute_summary_metrics(data)
     corr = compute_correlations(data, window=60, raw_df=raw_data)
+    active_alerts = detect_alerts(metrics)
+    morning_brief = generate_morning_brief(metrics, active_alerts)
     generate_chart(data, metrics, corr)
-    generate_interactive_dashboard(data, metrics, corr)
-    update_readme(metrics)
-    print("Tablero macro actualizado exitosamente (estático + interactivo).")
+    generate_interactive_dashboard(data, metrics, corr, active_alerts, morning_brief, data_sources)
+    update_readme(metrics, active_alerts, morning_brief, data_sources)
+    send_optional_alerts(active_alerts, morning_brief, data.index.max().strftime("%Y-%m-%d"))
+    print("Tablero macro V2 actualizado exitosamente (estático + interactivo + histórico).")
