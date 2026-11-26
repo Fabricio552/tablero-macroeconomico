@@ -344,43 +344,275 @@ def save_history_snapshot(df: pd.DataFrame, history_path: str) -> pd.DataFrame:
     return merged
 
 
-def send_optional_alerts(alerts: list[dict[str, str]], brief: list[str], date_str: str) -> bool:
-    """Send actionable alerts via Slack Webhook or Telegram Bot when secrets are configured."""
+DEFAULT_DASHBOARD_URL = "https://fabricio552.github.io/tablero-macroeconomico/"
+TWILIO_SANDBOX_WHATSAPP_FROM = "whatsapp:+14155238886"
+
+
+def _strip_markdown(text: str) -> str:
+    return text.replace("**", "").replace("`", "")
+
+
+def _resolve_dashboard_url(explicit_url: str | None = None) -> str:
+    if explicit_url and explicit_url.strip():
+        return explicit_url.strip()
+    env_url = os.environ.get("DASHBOARD_URL", "").strip()
+    if env_url:
+        return env_url
+    gh_repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if "/" in gh_repo:
+        owner, repo = gh_repo.split("/", 1)
+        return f"https://{owner.lower()}.github.io/{repo}/"
+    return DEFAULT_DASHBOARD_URL
+
+
+def _normalize_whatsapp_address(raw_value: str) -> str:
+    value = raw_value.strip()
+    if not value:
+        return ""
+    if value.lower().startswith("whatsapp:"):
+        suffix = value.split(":", 1)[1].strip()
+        return f"whatsapp:{suffix}"
+    if not value.startswith("+"):
+        value = f"+{value}"
+    return f"whatsapp:{value}"
+
+
+def format_whatsapp_report(
+    alerts: list[dict[str, str]],
+    brief: list[str],
+    date_str: str,
+    summary_df: pd.DataFrame | None = None,
+    dashboard_url: str | None = None,
+    max_chars: int = 1550,
+) -> str:
+    """Build a concise WhatsApp-ready daily macro report within provider length limits."""
+    resolved_url = _resolve_dashboard_url(dashboard_url)
     actionable = [a for a in alerts if a["severity"] in ("high", "medium")]
-    if not actionable:
+
+    header = [f"🌎 *Monitor Macro UY/LatAm — {date_str}*", ""]
+
+    if actionable:
+        alert_lines = [f"🚨 *Alertas del día ({len(actionable)}):*"]
+        for a in actionable[:3]:
+            icon = "🔴" if a["severity"] == "high" else "🟠"
+            alert_lines.append(f"{icon} {a['title']} — {a['detail']}")
+        if len(actionable) > 3:
+            alert_lines.append(f"• ... y {len(actionable) - 3} alerta(s) más en el tablero.")
+    else:
+        alert_lines = ["🟢 *Sin alertas críticas hoy:* variables dentro de rangos normales."]
+
+    quotes_lines: list[str] = []
+    if summary_df is not None and not summary_df.empty and "Activo" in summary_df.columns:
+        by_name = summary_df.set_index("Activo")
+        key_assets = ["USD/UYU", "BRL/UYU", "UI (BCU)", "DXY", "USD/BRL"]
+        picked = [asset for asset in key_assets if asset in by_name.index]
+        if picked:
+            quotes_lines.append("💱 *Cierres clave:*")
+            for asset in picked:
+                row = by_name.loc[asset]
+                if asset == "UI (BCU)":
+                    quotes_lines.append(f"• UI (BCU): *{float(row['Último']):.4f}* ({row['YTD']} YTD)")
+                else:
+                    pos_suffix = f" | 52S: {row['pos_52w_pct']:.0f}%" if asset in ("USD/UYU", "BRL/UYU") else ""
+                    quotes_lines.append(
+                        f"• {asset}: *{row['Último']}* ({row['Var 1D']} 1D | {row['YTD']} YTD{pos_suffix})"
+                    )
+
+    brief_lines: list[str] = []
+    clean_brief = [_strip_markdown(b) for b in brief if not b.strip().startswith("**Alertas activas")]
+    if quotes_lines:
+        clean_brief = [b for b in clean_brief if not b.startswith("Frente cambiario UY/Brasil:")]
+    if clean_brief:
+        brief_lines.append("📝 *Lectura ejecutiva:*")
+        for b in clean_brief[:2]:
+            brief_lines.append(f"• {b}")
+
+    footer = [f"📊 *Tablero y simulador:*\n{resolved_url}"]
+
+    sections = [
+        "\n".join(header + alert_lines),
+        "\n".join(quotes_lines) if quotes_lines else "",
+        "\n".join(brief_lines) if brief_lines else "",
+        "\n".join(footer),
+    ]
+    message = "\n\n".join(sec for sec in sections if sec)
+
+    if len(message) > max_chars and brief_lines:
+        sections[2] = ""
+        message = "\n\n".join(sec for sec in sections if sec)
+
+    if len(message) > max_chars:
+        budget = max_chars - len(sections[3]) - 5
+        head_body = "\n\n".join(sec for sec in sections[:2] if sec)
+        message = f"{head_body[:max(budget, 80)].rstrip()}...\n\n{sections[3]}"
+
+    return message
+
+
+def _send_twilio_whatsapp(message: str) -> bool:
+    sid = os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
+    token = os.environ.get("TWILIO_AUTH_TOKEN", "").strip()
+    to_raw = os.environ.get("TWILIO_WHATSAPP_TO", "").strip()
+    if not (sid and token and to_raw):
         return False
 
-    lines = [f"📊 Monitor Macro UY/LatAm — {date_str}", ""]
-    for a in actionable[:5]:
-        icon = "🔴" if a["severity"] == "high" else "🟠"
-        lines.append(f"{icon} {a['title']} — {a['detail']}")
-    if brief:
-        lines.append("")
-        lines.append(brief[0].replace("**", "").replace("`", ""))
-    message = "\n".join(lines)
+    from_raw = os.environ.get("TWILIO_WHATSAPP_FROM", "").strip() or TWILIO_SANDBOX_WHATSAPP_FROM
+    from_addr = _normalize_whatsapp_address(from_raw)
+    recipients = [_normalize_whatsapp_address(item) for item in to_raw.split(",") if item.strip()]
 
-    sent = False
-    slack_url = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
-    if slack_url:
-        try:
-            resp = requests.post(slack_url, json={"text": message}, timeout=10)
-            resp.raise_for_status()
-            sent = True
-        except Exception as exc:
-            print(f"[WARN] No se pudo enviar alerta a Slack: {exc}")
-
-    tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    tg_chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if tg_token and tg_chat:
+    sent_any = False
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+    for to_addr in recipients:
         try:
             resp = requests.post(
-                f"https://api.telegram.org/bot{tg_token}/sendMessage",
-                json={"chat_id": tg_chat, "text": message},
+                url,
+                auth=(sid, token),
+                data={"From": from_addr, "To": to_addr, "Body": message},
                 timeout=10,
             )
             resp.raise_for_status()
-            sent = True
+            sent_any = True
+            print(f"[INFO] Reporte diario enviado por Twilio WhatsApp a {to_addr}.")
         except Exception as exc:
-            print(f"[WARN] No se pudo enviar alerta a Telegram: {exc}")
+            print(f"[WARN] No se pudo enviar WhatsApp vía Twilio a {to_addr}: {exc}")
+    return sent_any
+
+
+def _build_whatsapp_webhook_payload(
+    webhook_url: str,
+    message: str,
+    date_str: str,
+    actionable: list[dict[str, str]],
+    dashboard_url: str,
+    target: str = "",
+) -> dict[str, object]:
+    if "sendtext" in webhook_url.lower():
+        payload: dict[str, object] = {"text": message}
+        if target:
+            payload["number"] = target
+        return payload
+
+    payload = {
+        "text": message,
+        "message": message,
+        "body": message,
+        "date": date_str,
+        "alerts_count": len(actionable),
+        "has_critical_alerts": bool(actionable),
+        "alerts": actionable[:5],
+        "dashboard_url": dashboard_url,
+    }
+    if target:
+        payload["number"] = target
+        payload["to"] = target
+    return payload
+
+
+def _send_whatsapp_webhook(
+    message: str,
+    date_str: str,
+    actionable: list[dict[str, str]],
+    dashboard_url: str,
+) -> bool:
+    webhook_url = os.environ.get("WHATSAPP_WEBHOOK_URL", "").strip()
+    if not webhook_url:
+        return False
+
+    token = os.environ.get("WHATSAPP_WEBHOOK_TOKEN", "").strip()
+    to_raw = os.environ.get("WHATSAPP_WEBHOOK_TO", "").strip()
+    targets = [item.strip() for item in to_raw.split(",") if item.strip()] or [""]
+
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["apikey"] = token
+        headers["Authorization"] = f"Bearer {token}"
+
+    sent_any = False
+    for target in targets:
+        payload = _build_whatsapp_webhook_payload(
+            webhook_url=webhook_url,
+            message=message,
+            date_str=date_str,
+            actionable=actionable,
+            dashboard_url=dashboard_url,
+            target=target,
+        )
+        try:
+            resp = requests.post(webhook_url, json=payload, headers=headers, timeout=10)
+            resp.raise_for_status()
+            sent_any = True
+            label = target or "webhook configurado"
+            print(f"[INFO] Reporte diario enviado vía WhatsApp Webhook ({label}).")
+        except Exception as exc:
+            print(f"[WARN] No se pudo enviar WhatsApp vía Webhook: {exc}")
+    return sent_any
+
+
+def send_optional_alerts(
+    alerts: list[dict[str, str]],
+    brief: list[str],
+    date_str: str,
+    summary_df: pd.DataFrame | None = None,
+    dashboard_url: str | None = None,
+) -> bool:
+    """Send daily WhatsApp report (Twilio/Webhook) and actionable Slack/Telegram alerts."""
+    actionable = [a for a in alerts if a["severity"] in ("high", "medium")]
+    resolved_url = _resolve_dashboard_url(dashboard_url)
+    sent = False
+
+    # 1) Slack & Telegram: actionable alerts only (HIGH / MEDIUM)
+    if actionable:
+        lines = [f"📊 Monitor Macro UY/LatAm — {date_str}", ""]
+        for a in actionable[:5]:
+            icon = "🔴" if a["severity"] == "high" else "🟠"
+            lines.append(f"{icon} {a['title']} — {a['detail']}")
+        if brief:
+            lines.append("")
+            lines.append(_strip_markdown(brief[0]))
+        alert_msg = "\n".join(lines)
+
+        slack_url = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
+        if slack_url:
+            try:
+                resp = requests.post(slack_url, json={"text": alert_msg}, timeout=10)
+                resp.raise_for_status()
+                sent = True
+            except Exception as exc:
+                print(f"[WARN] No se pudo enviar alerta a Slack: {exc}")
+
+        tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+        tg_chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+        if tg_token and tg_chat:
+            try:
+                resp = requests.post(
+                    f"https://api.telegram.org/bot{tg_token}/sendMessage",
+                    json={"chat_id": tg_chat, "text": alert_msg},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                sent = True
+            except Exception as exc:
+                print(f"[WARN] No se pudo enviar alerta a Telegram: {exc}")
+
+    # 2) WhatsApp (Twilio / External Webhook): daily weekday brief + alerts
+    has_twilio = bool(
+        os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
+        and os.environ.get("TWILIO_AUTH_TOKEN", "").strip()
+        and os.environ.get("TWILIO_WHATSAPP_TO", "").strip()
+    )
+    has_wa_webhook = bool(os.environ.get("WHATSAPP_WEBHOOK_URL", "").strip())
+
+    if has_twilio or has_wa_webhook:
+        wa_msg = format_whatsapp_report(
+            alerts=alerts,
+            brief=brief,
+            date_str=date_str,
+            summary_df=summary_df,
+            dashboard_url=resolved_url,
+        )
+        if has_twilio and _send_twilio_whatsapp(wa_msg):
+            sent = True
+        if has_wa_webhook and _send_whatsapp_webhook(wa_msg, date_str, actionable, resolved_url):
+            sent = True
 
     return sent

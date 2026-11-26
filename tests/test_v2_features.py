@@ -6,6 +6,7 @@ from src.analyze import (
     compute_correlations,
     compute_summary_metrics,
     detect_alerts,
+    format_whatsapp_report,
     generate_morning_brief,
     save_history_snapshot,
     send_optional_alerts,
@@ -121,9 +122,131 @@ def test_save_history_snapshot_merges_without_duplicates(tmp_path):
     assert merged.loc[pd.Timestamp("2026-11-25"), "USD/UYU"] == pytest.approx(40.5)
 
 
+def _clear_notification_env(monkeypatch):
+    for var in (
+        "SLACK_WEBHOOK_URL",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
+        "DASHBOARD_URL",
+        "GITHUB_REPOSITORY",
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_WHATSAPP_FROM",
+        "TWILIO_WHATSAPP_TO",
+        "WHATSAPP_WEBHOOK_URL",
+        "WHATSAPP_WEBHOOK_TOKEN",
+        "WHATSAPP_WEBHOOK_TO",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
 def test_send_optional_alerts_noop_without_env(monkeypatch):
-    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    _clear_notification_env(monkeypatch)
     alerts = [{"severity": "high", "title": "Test", "detail": "D", "action": "A"}]
     assert send_optional_alerts(alerts, ["Brief"], "2026-11-25") is False
+
+
+def test_format_whatsapp_report_includes_quotes_alerts_and_link(monkeypatch):
+    _clear_notification_env(monkeypatch)
+    dates = pd.bdate_range("2026-11-01", periods=10)
+    df = pd.DataFrame(
+        {
+            "USD/UYU": np.linspace(39.8, 40.77, 10),
+            "BRL/UYU": np.linspace(7.4, 7.22, 10),
+            "UI (BCU)": np.linspace(6.68, 6.7172, 10),
+            "DXY": np.linspace(102.5, 103.77, 10),
+            "USD/BRL": np.linspace(5.80, 5.74, 10),
+        },
+        index=dates,
+    )
+    summary = compute_summary_metrics(df)
+    alerts = detect_alerts(summary)
+    brief = generate_morning_brief(summary, alerts)
+
+    msg_alert = format_whatsapp_report(alerts, brief, "2026-11-26", summary_df=summary)
+    assert "Monitor Macro UY/LatAm — 2026-11-26" in msg_alert
+    assert "USD/UYU: *40.77*" in msg_alert
+    assert "BRL/UYU: *7.22*" in msg_alert
+    assert "UI (BCU): *6.7172*" in msg_alert
+    assert "DXY: *103.77*" in msg_alert
+    assert "https://fabricio552.github.io/tablero-macroeconomico/" in msg_alert
+    assert "**" not in msg_alert
+    assert len(msg_alert) <= 1550
+
+    calm_alerts = [{"severity": "info", "asset": "Mercado", "title": "Sin alertas", "detail": "Normal", "action": "Ok"}]
+    msg_calm = format_whatsapp_report(calm_alerts, brief, "2026-11-26", summary_df=summary)
+    assert "Sin alertas críticas hoy" in msg_calm
+
+
+def test_send_optional_alerts_twilio_whatsapp_sends_daily_even_without_critical_alerts(monkeypatch):
+    _clear_notification_env(monkeypatch)
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC123")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "secret")
+    monkeypatch.setenv("TWILIO_WHATSAPP_TO", "+59899111222, whatsapp:+59899333444")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "Fabricio552/tablero-macroeconomico")
+
+    calls = []
+
+    class DummyResp:
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return DummyResp()
+
+    monkeypatch.setattr("src.analyze.requests.post", fake_post)
+
+    calm_alerts = [{"severity": "info", "asset": "Mercado", "title": "Normal", "detail": "Ok", "action": "Ok"}]
+    dates = pd.bdate_range("2026-11-01", periods=8)
+    df = pd.DataFrame({"USD/UYU": np.full(8, 40.50), "DXY": np.full(8, 103.5)}, index=dates)
+    summary = compute_summary_metrics(df)
+
+    ok = send_optional_alerts(calm_alerts, ["**Costos locales:** sin cambios"], "2026-11-26", summary_df=summary)
+    assert ok is True
+    assert len(calls) == 2
+    assert calls[0][0] == "https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json"
+    assert calls[0][1]["auth"] == ("AC123", "secret")
+    assert calls[0][1]["data"]["From"] == "whatsapp:+14155238886"
+    assert calls[0][1]["data"]["To"] == "whatsapp:+59899111222"
+    assert calls[1][1]["data"]["To"] == "whatsapp:+59899333444"
+    assert "Sin alertas críticas hoy" in calls[0][1]["data"]["Body"]
+    assert "https://fabricio552.github.io/tablero-macroeconomico/" in calls[0][1]["data"]["Body"]
+
+
+def test_send_optional_alerts_whatsapp_webhook_and_evolution_mode(monkeypatch):
+    _clear_notification_env(monkeypatch)
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_URL", "https://hooks.example.com/macro-wa")
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_TOKEN", "tok-99")
+    monkeypatch.setenv("DASHBOARD_URL", "https://mi-tablero.example.com/")
+
+    calls = []
+
+    class DummyResp:
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return DummyResp()
+
+    monkeypatch.setattr("src.analyze.requests.post", fake_post)
+
+    alerts = [{"severity": "high", "asset": "USD/UYU", "title": "Tope 52S", "detail": "40.77", "action": "Cubrir"}]
+    assert send_optional_alerts(alerts, ["Resumen"], "2026-11-26") is True
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    assert kwargs["headers"]["Authorization"] == "Bearer tok-99"
+    assert kwargs["headers"]["apikey"] == "tok-99"
+    assert kwargs["json"]["alerts_count"] == 1
+    assert kwargs["json"]["has_critical_alerts"] is True
+    assert kwargs["json"]["dashboard_url"] == "https://mi-tablero.example.com/"
+
+    # Evolution API /message/sendText mode with group/target ID
+    calls.clear()
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_URL", "https://evo.example.com/message/sendText/finanzas")
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_TO", "12036300112233@g.us")
+    assert send_optional_alerts(alerts, ["Resumen"], "2026-11-26") is True
+    assert calls[0][1]["json"]["number"] == "12036300112233@g.us"
+    assert "text" in calls[0][1]["json"]
+    assert set(calls[0][1]["json"].keys()) == {"number", "text"}

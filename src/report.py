@@ -1050,7 +1050,7 @@ Yahoo Finance (yfinance) + BCU vía datosUruguay.com (UI y BRL/UYU)
         │
         ▼
   src/report.py    ──▶ output/macro_dashboard.png + docs/index.html (Simulador) + README.md
-        │              (+ alertas opcionales vía Slack / Telegram en CI)
+        │              (+ notificaciones automáticas WhatsApp / Slack / Telegram en CI)
         ▲
 GitHub Actions (.github/workflows/update_macro.yml — Lun–Vie 21:30 UTC)
 ```
@@ -1062,7 +1062,7 @@ GitHub Actions (.github/workflows/update_macro.yml — Lun–Vie 21:30 UTC)
 - **Correlaciones (60 días hábiles):** calculadas sobre cambios diarios observados de activos de mercado (`pct_change()` en precios, `diff()` en tasas), excluyendo `UI (BCU)` por ser una interpolación diaria de inflación pasada.
 - **Fuentes y Atribución:** {sources_md}. Datos oficiales del BCU consumidos vía [datosUruguay.com](https://datosuruguay.com) bajo licencia CC-BY-4.0; `USD/ARS` (`ARS=X`) refleja tipo de cambio oficial mayorista.
 
-## 🔔 Alertas Opcionales (Slack / Telegram) y Ejecución Local
+## 🔔 Notificaciones Automáticas (WhatsApp, Slack y Telegram)
 
 ```bash
 python -m venv .venv
@@ -1072,9 +1072,13 @@ pytest
 python src/report.py
 ```
 
-Para activar notificaciones automáticas en GitHub Actions cuando haya alertas `HIGH`/`MEDIUM`, configurá en **Settings → Secrets and variables → Actions** cualquiera de estas variables opcionales:
-- `SLACK_WEBHOOK_URL`
-- `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID`
+Para activar envíos automáticos en GitHub Actions (**Settings → Secrets and variables → Actions**):
+
+- **WhatsApp diario al cierre (Lun–Vie con cierres clave, alertas y link al tablero):**
+  - *Vía Twilio WhatsApp:* `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_TO` (ej. `+59899123456`, admite múltiples separados por coma) y opcional `TWILIO_WHATSAPP_FROM` (por defecto usa Twilio Sandbox `whatsapp:+14155238886`).
+  - *Vía Webhook externo (Evolution API, Make, Zapier o n8n para chats o grupos):* `WHATSAPP_WEBHOOK_URL` y opcionales `WHATSAPP_WEBHOOK_TOKEN` / `WHATSAPP_WEBHOOK_TO`.
+  - *Opcional:* `DASHBOARD_URL` si querés fijar un enlace distinto al de GitHub Pages del repositorio.
+- **Slack / Telegram (solo cuando saltan alertas `HIGH`/`MEDIUM`):** `SLACK_WEBHOOK_URL` o `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`.
 
 ---
 *Desarrollado con Python (`yfinance`, `pandas`, `requests`, `matplotlib`, `seaborn`, `plotly`, `pytest`) y automatizado con GitHub Actions.*
@@ -1093,5 +1097,10 @@ if __name__ == "__main__":
     generate_chart(data, metrics, corr)
     generate_interactive_dashboard(data, metrics, corr, active_alerts, morning_brief, data_sources)
     update_readme(metrics, active_alerts, morning_brief, data_sources)
-    send_optional_alerts(active_alerts, morning_brief, data.index.max().strftime("%Y-%m-%d"))
+    send_optional_alerts(
+        active_alerts,
+        morning_brief,
+        data.index.max().strftime("%Y-%m-%d"),
+        summary_df=metrics,
+    )
     print("Tablero macro V2 actualizado exitosamente (estático + interactivo + histórico).")
