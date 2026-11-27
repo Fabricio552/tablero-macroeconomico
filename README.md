@@ -2,7 +2,7 @@
 
 Pipeline automatizado en Python orientado a **decisión financiera y gestión de costos empresariales** en Uruguay y la región: combina mercado internacional (`yfinance`) con datos oficiales del **Banco Central del Uruguay (UI y BRL/UYU)**, detección estadística de anomalías (`Z-Score`), alertas accionables, histórico en CSV y un **simulador interactivo de impacto en márgenes**.
 
-*Última actualización automática: **2026-11-26 21:33 UTC***
+*Última actualización automática: **2026-11-27 03:42 UTC***
 
 > **📊 Versión interactiva + Simulador de Márgenes:** abrí [`docs/index.html`](./docs/index.html) (o activá **GitHub Pages → `/docs`** en este repositorio).  
 > **📁 Histórico para Excel / Power BI:** [`data/macro_history.csv`](./data/macro_history.csv)
@@ -10,32 +10,30 @@ Pipeline automatizado en Python orientado a **decisión financiera y gestión de
 ---
 
 ## 📝 Morning Brief Ejecutivo
-- **Frente cambiario UY/Brasil:** `USD/UYU` cerró en **40.7** (-0.18% 1D | +4.24% YTD | pos. 52S: 98%) y el cruce bilateral **BRL/UYU** en **7.36** (-1.42% YTD), frente a un dólar global (**DXY**) en **+5.59% YTD**.
-- **Costos locales vs. Dólar:** la **UI (BCU)** acumula **+4.57% YTD** vs. **+4.24% YTD** del `USD/UYU` (brecha real **-0.33 p.p.**, dólar por debajo de la UI (atraso cambiario real)).
-- **Drivers globales (financiamiento y energía):** Tasa US 10Y en **4.85%** (+68.5 bps YTD) • WTI en **$84.91** (+47.88% YTD) • Oro en **$3593.4** (-17.22% YTD).
-- **Alertas activas (7):** Movimiento diario atípico en USD/BRL (-4.28%); Movimiento diario atípico en BRL/UYU (+1.98%); USD/ARS en máximo anual (100% del rango 52S).
+- **Frente cambiario UY/Brasil:** `USD/UYU` cerró en **40.7** (+0.00% 1D | +4.24% YTD | pos. 52S: 98%) y el cruce bilateral **BRL/UYU** en **7.36** (-1.42% YTD), frente a un dólar global (**DXY**) en **+5.49% YTD**.
+- **Costos locales vs. Dólar:** la **UI (BCU)** acumula **+4.59% YTD** vs. **+4.24% YTD** del `USD/UYU` (brecha real **-0.35 p.p.**, dólar por debajo de la UI (atraso cambiario real)).
+- **Drivers globales (financiamiento y energía):** Tasa US 10Y en **4.85%** (+68.5 bps YTD) • WTI en **$85.78** (+49.39% YTD) • Oro en **$3655.9** (-15.78% YTD).
+- **Alertas activas (3):** Movimiento diario atípico en USD/BRL (-2.93%); USD/ARS en máximo anual (99% del rango 52S); Presión semanal acumulada en USD/BRL (-4.76% en 5D).
 
 ## 🚨 Radar de Alertas del Día
-- **[HIGH] Movimiento diario atípico en USD/BRL (-4.28%):** Desvío de -6.5σ respecto a su volatilidad de últimos 20 días hábiles. *(Validar si responde a shock global (DXY/US 10Y) o evento puntual antes de fijar precio.)*
-- **[HIGH] Movimiento diario atípico en BRL/UYU (+1.98%):** Desvío de +3.1σ respecto a su volatilidad de últimos 20 días hábiles. *(Validar si responde a shock global (DXY/US 10Y) o evento puntual antes de fijar precio.)*
-- **[HIGH] USD/ARS en máximo anual (100% del rango 52S):** Cierre en 1601.0 (+10.30% YTD). *(Revisar cobertura cambiaria, costos de reposición o ajuste de listas de precios.)*
-- **[MEDIUM] Presión semanal acumulada en USD/BRL (-3.92% en 5D):** Volatilidad 20D actual: 20.5%. *(Monitorear impacto en capital de trabajo y márgenes de la semana.)*
-- **[MEDIUM] Presión semanal acumulada en BRL/UYU (-3.04% en 5D):** Volatilidad 20D actual: 16.2%. *(Monitorear impacto en capital de trabajo y márgenes de la semana.)*
+- **[HIGH] Movimiento diario atípico en USD/BRL (-2.93%):** Desvío de -4.0σ respecto a su volatilidad de últimos 20 días hábiles. *(Validar si responde a shock global (DXY/US 10Y) o evento puntual antes de fijar precio.)*
+- **[HIGH] USD/ARS en máximo anual (99% del rango 52S):** Cierre en 1601.0 (+10.30% YTD). *(Revisar cobertura cambiaria, costos de reposición o ajuste de listas de precios.)*
+- **[MEDIUM] Presión semanal acumulada en USD/BRL (-4.76% en 5D):** Volatilidad 20D actual: 17.8%. *(Monitorear impacto en capital de trabajo y márgenes de la semana.)*
 
 ---
 
 ## 📊 Resumen de Mercado
-| Activo       | Unidad        |    Último | Var 1D   | Var 5D    | YTD       | 1A        | Vol 20D   | Z-Score 1D   | Rango 52S                |
-|:-------------|:--------------|----------:|:---------|:----------|:----------|:----------|:----------|:-------------|:-------------------------|
-| USD/UYU      | UYU           |   40.7    | -0.18%   | +0.22%    | +4.24%    | +2.58%    | 2.2%      | -2.0σ        | 37.45 – 40.77 (98%)      |
-| USD/BRL      | BRL           |    5.65   | -4.28%   | -3.92%    | +3.20%    | +5.05%    | 20.5%     | -6.5σ        | 4.91 – 5.95 (72%)        |
-| BRL/UYU      | UYU/BRL       |    7.36   | +1.98%   | -3.04%    | -1.42%    | -4.47%    | 16.2%     | +3.1σ        | 7.19 – 8.38 (14%)        |
-| USD/ARS      | ARS (Oficial) | 1601      | +0.53%   | +2.69%    | +10.30%   | +10.61%   | 5.0%      | +1.2σ        | 1354.73 – 1601.00 (100%) |
-| UI (BCU)     | UYU/UI        |    6.7172 | +0.02%   | +0.14%    | +4.57%    | +4.82%    | 0.2%      | n/a          | 6.41 – 6.72 (100%)       |
-| DXY          | Índice        |  103.78   | +0.10%   | -0.12%    | +5.59%    | +4.19%    | 5.8%      | +0.1σ        | 96.22 – 104.32 (93%)     |
-| WTI Oil      | USD/bbl       |   84.91   | +1.47%   | +2.04%    | +47.88%   | +44.77%   | 51.6%     | +0.8σ        | 55.27 – 112.95 (51%)     |
-| Gold         | USD/oz        | 3593.4    | +1.63%   | -2.50%    | -17.22%   | -13.73%   | 35.4%     | +1.1σ        | 3515.40 – 5318.40 (4%)   |
-| US 10Y Yield | % anual       |    4.85   | +0.0 bps | -20.4 bps | +68.5 bps | +85.0 bps | 6.0 bps/d | +0.2σ        | 3.96 – 5.31 (66%)        |
+| Activo       | Unidad        |    Último | Var 1D   | Var 5D   | YTD       | 1A        | Vol 20D   | Z-Score 1D   | Rango 52S               |
+|:-------------|:--------------|----------:|:---------|:---------|:----------|:----------|:----------|:-------------|:------------------------|
+| USD/UYU      | UYU           |   40.7    | +0.00%   | +0.16%   | +4.24%    | +3.11%    | 2.2%      | -0.4σ        | 37.45 – 40.77 (98%)     |
+| USD/BRL      | BRL           |    5.65   | -2.93%   | -4.76%   | +3.20%    | +6.01%    | 17.8%     | -4.0σ        | 4.91 – 5.95 (72%)       |
+| BRL/UYU      | UYU/BRL       |    7.36   | +0.00%   | -1.47%   | -1.42%    | -3.79%    | 16.1%     | +0.5σ        | 7.19 – 8.38 (14%)       |
+| USD/ARS      | ARS (Oficial) | 1601      | -0.12%   | +2.32%   | +10.30%   | +10.21%   | 5.0%      | -1.0σ        | 1354.73 – 1603.00 (99%) |
+| UI (BCU)     | UYU/UI        |    6.7185 | +0.02%   | +0.14%   | +4.59%    | +4.83%    | 0.2%      | n/a          | 6.41 – 6.72 (100%)      |
+| DXY          | Índice        |  103.68   | +0.00%   | -0.13%   | +5.49%    | +4.09%    | 5.8%      | -0.2σ        | 96.22 – 104.32 (92%)    |
+| WTI Oil      | USD/bbl       |   85.78   | +0.00%   | +2.14%   | +49.39%   | +46.26%   | 51.3%     | +0.2σ        | 55.27 – 112.95 (53%)    |
+| Gold         | USD/oz        | 3655.9    | +0.00%   | +4.00%   | -15.78%   | -12.23%   | 35.8%     | +0.2σ        | 3515.40 – 5318.40 (8%)  |
+| US 10Y Yield | % anual       |    4.85   | +0.0 bps | -6.4 bps | +68.5 bps | +85.0 bps | 5.9 bps/d | +0.1σ        | 3.96 – 5.31 (66%)       |
 
 ## 📈 Tablero Ejecutivo (4 Vistas)
 ![Dashboard Macro](./output/macro_dashboard.png)
