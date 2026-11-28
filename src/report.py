@@ -743,6 +743,7 @@ def generate_interactive_dashboard(
     }}
     header h1 {{ margin: 0 0 4px; font-size: 1.35rem; }}
     header p {{ margin: 0; color: var(--muted); font-size: 0.9rem; }}
+    .header-actions {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }}
     .btn-primary {{
       background: #0f172a;
       color: #ffffff;
@@ -754,6 +755,28 @@ def generate_interactive_dashboard(
       cursor: pointer;
     }}
     .btn-primary:hover {{ background: #1e293b; }}
+    .btn-secondary {{
+      background: #eff6ff;
+      color: #1d4ed8;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      padding: 8px 13px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+    }}
+    .btn-secondary:hover {{ background: #dbeafe; }}
+    .btn-help {{
+      background: #f8fafc;
+      color: #1d4ed8;
+      border: 1px solid #bfdbfe;
+      border-radius: 999px;
+      padding: 5px 12px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+    }}
+    .btn-help:hover {{ background: #eff6ff; }}
     .card {{
       background: var(--card);
       border: 1px solid var(--border);
@@ -763,6 +786,15 @@ def generate_interactive_dashboard(
       overflow: hidden;
     }}
     .card h2 {{ margin: 0 0 12px; font-size: 1.02rem; color: var(--ink); }}
+    .card-head {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }}
+    .card-head h2 {{ margin: 0; }}
     .exec-grid, .grid {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -831,9 +863,123 @@ def generate_interactive_dashboard(
     td.neg {{ color: var(--neg); background: var(--neg-bg); font-weight: 600; }}
     td.anom {{ color: var(--warn); background: var(--warn-bg); font-weight: 700; }}
     footer {{ text-align: center; color: var(--muted); font-size: 0.82rem; padding: 6px 0; }}
+    .inline-guide {{
+      margin-top: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 10px 14px;
+      font-size: 0.85rem;
+    }}
+    .inline-guide summary {{
+      cursor: pointer;
+      font-weight: 600;
+      color: #1d4ed8;
+      list-style: none;
+    }}
+    .inline-guide summary::-webkit-details-marker {{ display: none; }}
+    .guide-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }}
+    .guide-item {{
+      background: #ffffff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 0.84rem;
+      line-height: 1.45;
+    }}
+    .guide-item strong {{ display: block; color: var(--ink); margin-bottom: 3px; }}
+    .formula-box {{
+      background: #f1f5f9;
+      border-left: 4px solid #1d4ed8;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 0.85rem;
+      margin: 10px 0;
+      line-height: 1.5;
+    }}
+    .formula-box code {{
+      background: #ffffff;
+      padding: 1px 5px;
+      border-radius: 4px;
+      border: 1px solid #cbd5e1;
+      font-size: 0.84em;
+    }}
+    dialog#help-dialog {{
+      border: none;
+      border-radius: 14px;
+      padding: 0;
+      width: min(94vw, 760px);
+      max-height: 88vh;
+      background: transparent;
+      box-shadow: 0 24px 48px rgba(15, 23, 42, 0.28);
+    }}
+    dialog#help-dialog::backdrop {{
+      background: rgba(15, 23, 42, 0.55);
+      backdrop-filter: blur(2px);
+    }}
+    .modal-box {{
+      background: #ffffff;
+      color: var(--ink);
+      border-radius: 14px;
+      overflow-y: auto;
+      max-height: 88vh;
+      display: flex;
+      flex-direction: column;
+    }}
+    .modal-head {{
+      background: #0f172a;
+      color: #ffffff;
+      padding: 14px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }}
+    .modal-head h2 {{ margin: 0; font-size: 1.02rem; color: #ffffff; }}
+    .modal-close {{
+      background: rgba(255, 255, 255, 0.14);
+      color: #ffffff;
+      border: none;
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    .modal-close:hover {{ background: rgba(255, 255, 255, 0.25); }}
+    .tab-bar {{
+      display: flex;
+      gap: 8px;
+      padding: 12px 18px 0;
+      border-bottom: 1px solid var(--border);
+      background: #f8fafc;
+    }}
+    .tab-btn {{
+      background: transparent;
+      border: none;
+      border-bottom: 3px solid transparent;
+      padding: 8px 12px 10px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: var(--muted);
+      cursor: pointer;
+    }}
+    .tab-btn.active {{
+      color: #1d4ed8;
+      border-bottom-color: #1d4ed8;
+    }}
+    .modal-body {{ padding: 16px 18px 20px; font-size: 0.88rem; line-height: 1.5; }}
+    .tab-panel[hidden] {{ display: none; }}
     @media (max-width: 1024px) {{
       body {{ padding: 14px; }}
-      .exec-grid, .grid, .sim-body {{ grid-template-columns: 1fr; }}
+      .exec-grid, .grid, .sim-body, .guide-grid {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
@@ -844,13 +990,19 @@ def generate_interactive_dashboard(
         <h1>🌎 Monitor Macro &amp; Riesgo Cambiario V2 — Uruguay / LatAm</h1>
         <p>Cierre al <strong>{html.escape(last_date_str)}</strong> • Alertas estadísticas, cruce BRL/UYU, UI BCU y simulador de impacto en márgenes</p>
       </div>
-      <button type="button" class="btn-primary" id="download-csv-btn">📥 Descargar Histórico CSV</button>
+      <div class="header-actions">
+        <button type="button" class="btn-secondary" id="open-guide-btn">📖 ¿Cómo se calcula todo?</button>
+        <button type="button" class="btn-primary" id="download-csv-btn">📥 Descargar Histórico CSV</button>
+      </div>
     </header>
 
     {html_brief_alerts}
 
     <section class="card">
-      <h2>🧮 Simulador de Impacto Cambiario en Costos y Márgenes</h2>
+      <div class="card-head">
+        <h2>🧮 Simulador de Impacto Cambiario en Costos y Márgenes</h2>
+        <button type="button" class="btn-help" id="open-sim-help-btn">❓ ¿Qué hace el simulador?</button>
+      </div>
       <div class="sim-toolbar">
         <span style="font-size:0.86rem;font-weight:600;color:#475569;">Perfil empresa:</span>
         <button type="button" class="sim-btn active" data-preset="importadora">Importadora UY</button>
@@ -887,8 +1039,32 @@ def generate_interactive_dashboard(
     </section>
 
     <section class="card">
-      <h2>📊 Resumen Ejecutivo de Mercado (Volatilidad 20D, Z-Score y Rango 52S)</h2>
+      <div class="card-head">
+        <h2>📊 Resumen Ejecutivo de Mercado (Volatilidad 20D, Z-Score y Rango 52S)</h2>
+        <button type="button" class="btn-help" id="open-metrics-help-btn">📖 ¿Qué significa cada columna?</button>
+      </div>
       {html_table}
+      <details class="inline-guide">
+        <summary>▸ Ver guía rápida de cómo se calcula cada indicador y gráfico</summary>
+        <div class="guide-grid">
+          <div class="guide-item">
+            <strong>Var 1D, 5D, YTD y 1A (% vs. bps)</strong>
+            Miden cuánto cambió cada precio frente a 1 día hábil, 5 días hábiles, el cierre del último día del año pasado (YTD) y hace 1 año. Para la tasa <code>US 10Y Yield</code> se expresa en puntos básicos (<code>100 bps = 1,00%</code>).
+          </div>
+          <div class="guide-item">
+            <strong>Vol 20D (Volatilidad)</strong>
+            Desvío estándar de los movimientos diarios en las últimas 20 ruedas hábiles, anualizado en <code>%</code> (multiplicado por <code>√252</code>) o expresado en <code>bps/día</code> para la tasa US 10Y. Mayor volatilidad implica mayor incertidumbre.
+          </div>
+          <div class="guide-item">
+            <strong>Z-Score 1D (Detector de Anomalías)</strong>
+            Compara la variación de hoy contra la media y desvío de los 20 días hábiles previos: <code>(hoy − media) ÷ desvío</code>. Si supera <code>±2.0σ</code> se resalta en amarillo porque es un salto atípico.
+          </div>
+          <div class="guide-item">
+            <strong>Rango 52S y Correlación (60 Ruedas)</strong>
+            El Rango 52S indica el mínimo y máximo anual; el <code>%</code> ubica dónde cerró hoy (<code>0%</code> piso anual, <code>100%</code> techo). La matriz de correlación mide de <code>-1</code> a <code>+1</code> cómo se movieron juntas en los últimos 60 días hábiles (sin rellenar feriados ni incluir <code>UI</code>).
+          </div>
+        </div>
+      </details>
     </section>
 
     <section class="grid">
@@ -897,6 +1073,83 @@ def generate_interactive_dashboard(
       <div class="card">{div_bar}</div>
       <div class="card">{div_corr}</div>
     </section>
+
+    <dialog id="help-dialog" aria-labelledby="help-dialog-title">
+      <div class="modal-box">
+        <div class="modal-head">
+          <h2 id="help-dialog-title">📖 Guía del Tablero y Simulador de Márgenes</h2>
+          <button type="button" class="modal-close" id="close-help-btn" aria-label="Cerrar">✕ Cerrar</button>
+        </div>
+        <div class="tab-bar" role="tablist">
+          <button type="button" class="tab-btn active" role="tab" id="tab-sim-btn" aria-selected="true" data-tab="sim">🧮 Cómo funciona el Simulador</button>
+          <button type="button" class="tab-btn" role="tab" id="tab-metrics-btn" aria-selected="false" data-tab="metrics">📊 Qué significa cada cálculo</button>
+        </div>
+        <div class="modal-body">
+          <div id="panel-sim" class="tab-panel">
+            <p style="margin-top:0;">
+              El <strong>Simulador de Impacto Cambiario</strong> estima cómo la evolución reciente del dólar (<code>USD/UYU</code>), el real (<code>BRL/UYU</code>) y la inflación local indexada (<code>UI BCU</code>) presionan o benefician el margen de tu empresa si mantenés tus precios fijos en pesos uruguayos.
+            </p>
+            <div class="formula-box" id="sim-live-breakdown">
+              <strong>🔍 Tu cálculo actual en vivo (<span id="live-h-label">Año corrido (YTD)</span>):</strong><br />
+              • <strong>Costos:</strong> <span id="live-cost-formula">--</span><br />
+              • <strong>Ingresos:</strong> <span id="live-rev-formula">--</span><br />
+              • <strong>Efecto neto en margen:</strong> <span id="live-margin-formula">--</span>
+            </div>
+            <div class="guide-grid">
+              <div class="guide-item">
+                <strong>1. Cómo pondera Costos e Ingresos</strong>
+                Cada porcentaje se normaliza al 100% y se multiplica por lo que varió esa moneda o índice en el horizonte elegido (5 días, YTD o 1 año). Los ingresos en <code>UYU fijos</code> se toman como <code>0%</code> (suponen lista de precios sin remarcar).
+              </div>
+              <div class="guide-item">
+                <strong>2. Por qué el margen usa cociente y no resta</strong>
+                Se calcula como <code>((1 + ΔIngresos) ÷ (1 + ΔCostos) − 1) × 100</code>. Por eso, si los costos suben <code>+1.81%</code> e ingresos <code>0%</code>, la pérdida de poder de compra/margen es <code>1 ÷ 1.0181 − 1 = -1.78 p.p.</code>
+              </div>
+              <div class="guide-item">
+                <strong>3. Perfiles prearmados</strong>
+                <strong>Importadora UY:</strong> compra en USD y vende en UYU.<br />
+                <strong>Exportadora UY:</strong> cobra en USD y tiene costos locales en UI/UYU.<br />
+                <strong>Competencia Brasil:</strong> insumos/referencia atados a BRL y USD frente a venta local.
+              </div>
+              <div class="guide-item">
+                <strong>4. Cómo leer el resultado</strong>
+                Un valor <strong>negativo en rojo</strong> indica compresión de margen (costos subieron más que ingresos: evaluar ajuste de precios o cobertura). Un valor <strong>positivo en verde</strong> muestra mejora cambiaria relativa.
+              </div>
+            </div>
+          </div>
+          <div id="panel-metrics" class="tab-panel" hidden>
+            <p style="margin-top:0;">
+              Todos los indicadores combinan precios diarios de mercado internacional (<em>Yahoo Finance</em>) con series oficiales del <strong>Banco Central del Uruguay (BCU)</strong> vía <em>datosUruguay.com</em>.
+            </p>
+            <div class="guide-grid">
+              <div class="guide-item">
+                <strong>Variaciones 1D, 5D, YTD y 1A</strong>
+                <code>((Último ÷ Base) − 1) × 100</code> para monedas y commodities. En <code>YTD</code> la base es el último cierre del año anterior. En la tasa <code>US 10Y Yield</code> se muestra la diferencia en <strong>puntos básicos (<code>bps</code>)</strong>: <code>(Hoy − Base) × 100</code>.
+              </div>
+              <div class="guide-item">
+                <strong>Volatilidad 20D</strong>
+                Desviación estándar de los retornos diarios de las últimas <strong>20 ruedas hábiles</strong>, anualizada multiplicando por <code>√252</code> para precios/FX, o expresada en <code>bps/día</code> para tasas. Mide la turbulencia reciente del activo.
+              </div>
+              <div class="guide-item">
+                <strong>Z-Score 1D y Alertas Estadísticas</strong>
+                Mide cuántos desvíos estándar se movió hoy frente al promedio y volatilidad de los 20 días previos (sin incluir hoy). Un <code>|Z| ≥ 2.0σ</code> o un salto diario fuerte activa una alerta automática. En <code>UI (BCU)</code> figura <code>n/a</code> porque sigue inflación pasada, no oferta y demanda diaria.
+              </div>
+              <div class="guide-item">
+                <strong>Rango 52S (%)</strong>
+                <code>((Último − Mín 1A) ÷ (Máx 1A − Mín 1A)) × 100</code>. Indica dónde está el valor actual dentro de la banda del último año: <code>0%</code> es el piso más bajo y <code>100%</code> es el techo máximo (≥98% dispara alerta de máximo anual).
+              </div>
+              <div class="guide-item">
+                <strong>Brecha real USD vs. UI (BCU)</strong>
+                Compara <code>USD/UYU YTD − UI (BCU) YTD</code>. Si es negativa, la inflación en UI sube más rápido que el dólar (encarece costos locales medidos en dólares). Si es positiva, el dólar corre por encima de la UI.
+              </div>
+              <div class="guide-item">
+                <strong>Correlación de 60 Ruedas (r)</strong>
+                Correlación lineal de Pearson sobre los cambios diarios observados de los últimos <strong>60 días hábiles</strong> (<code>+1</code> suben en sintonía, <code>-1</code> se mueven en dirección contraria, <code>0</code> sin relación lineal). Se excluyen feriados rellenados y la <code>UI (BCU)</code> para no sesgar el cálculo.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </dialog>
 
     <footer>
       Fuentes: {html.escape(source_summary)} • Atribución BCU/UI: Datos de <a href="https://datosuruguay.com" target="_blank" rel="noopener">datosUruguay.com</a> (CC-BY-4.0) • Uso informativo y de análisis.
@@ -911,8 +1164,14 @@ def generate_interactive_dashboard(
       exportadora: {{ cUsd: 35, cBrl: 0, cUi: 65, rUsd: 90, rBrl: 0, rUyu: 10 }},
       brasil:      {{ cUsd: 20, cBrl: 45, cUi: 35, rUsd: 0, rBrl: 0, rUyu: 100 }},
     }};
+    const HORIZON_LABELS = {{
+      "5d": "Últimos 5 días hábiles",
+      "ytd": "Año corrido (YTD)",
+      "1y": "Último año (1A)",
+    }};
 
     function val(id) {{ return Math.max(0, Number(document.getElementById(id).value) || 0); }}
+    function fmtPct(n, dec) {{ return (n >= 0 ? "+" : "") + n.toFixed(dec) + "%"; }}
 
     function recalcSim() {{
       const h = document.getElementById("sim-horizon").value;
@@ -937,9 +1196,9 @@ def generate_interactive_dashboard(
       const kpiMargin = document.getElementById("kpi-margin");
       const kpiMsg = document.getElementById("kpi-msg");
 
-      kpiCost.textContent = (costPct >= 0 ? "+" : "") + costPct.toFixed(2) + "%";
+      kpiCost.textContent = fmtPct(costPct, 2);
       kpiCost.style.color = costPct > 0 ? "#b91c1c" : "#1d4ed8";
-      kpiRev.textContent = (revPct >= 0 ? "+" : "") + revPct.toFixed(2) + "%";
+      kpiRev.textContent = fmtPct(revPct, 2);
       kpiRev.style.color = revPct >= 0 ? "#1d4ed8" : "#b91c1c";
       kpiMargin.textContent = (netEffect >= 0 ? "+" : "") + netEffect.toFixed(2) + " p.p.";
       kpiMargin.style.color = netEffect >= 0 ? "#15803d" : "#b91c1c";
@@ -951,7 +1210,60 @@ def generate_interactive_dashboard(
       }} else {{
         kpiMsg.textContent = "Impacto acotado en el horizonte seleccionado.";
       }}
+
+      const wCUsd = ((cUsd / cSum) * 100).toFixed(0);
+      const wCBrl = ((cBrl / cSum) * 100).toFixed(0);
+      const wCUi  = ((cUi / cSum) * 100).toFixed(0);
+      const wRUsd = ((rUsd / rSum) * 100).toFixed(0);
+      const wRBrl = ((rBrl / rSum) * 100).toFixed(0);
+      const wRUyu = ((rUyu / rSum) * 100).toFixed(0);
+
+      document.getElementById("live-h-label").textContent = HORIZON_LABELS[h] || h;
+      document.getElementById("live-cost-formula").textContent =
+        wCUsd + "% × USD/UYU (" + fmtPct(dUsd, 2) + ") + " +
+        wCBrl + "% × BRL/UYU (" + fmtPct(dBrl, 2) + ") + " +
+        wCUi + "% × UI (" + fmtPct(dUi, 2) + ") = " + fmtPct(costPct, 2);
+      document.getElementById("live-rev-formula").textContent =
+        wRUsd + "% × USD/UYU (" + fmtPct(dUsd, 2) + ") + " +
+        wRBrl + "% × BRL/UYU (" + fmtPct(dBrl, 2) + ") + " +
+        wRUyu + "% × UYU fijo (0.00%) = " + fmtPct(revPct, 2);
+      document.getElementById("live-margin-formula").textContent =
+        "((1 + " + (revPct / 100).toFixed(4) + ") ÷ (1 + " + (costPct / 100).toFixed(4) + ") − 1) × 100 = " +
+        (netEffect >= 0 ? "+" : "") + netEffect.toFixed(2) + " p.p.";
     }}
+
+    const helpDialog = document.getElementById("help-dialog");
+    function switchHelpTab(tabName) {{
+      const isSim = tabName === "sim";
+      document.getElementById("panel-sim").hidden = !isSim;
+      document.getElementById("panel-metrics").hidden = isSim;
+      const tabSim = document.getElementById("tab-sim-btn");
+      const tabMet = document.getElementById("tab-metrics-btn");
+      tabSim.classList.toggle("active", isSim);
+      tabMet.classList.toggle("active", !isSim);
+      tabSim.setAttribute("aria-selected", String(isSim));
+      tabMet.setAttribute("aria-selected", String(!isSim));
+    }}
+
+    function openHelpModal(tabName) {{
+      recalcSim();
+      switchHelpTab(tabName);
+      if (typeof helpDialog.showModal === "function") {{
+        helpDialog.showModal();
+      }} else {{
+        helpDialog.setAttribute("open", "");
+      }}
+    }}
+
+    document.getElementById("open-sim-help-btn").addEventListener("click", () => openHelpModal("sim"));
+    document.getElementById("open-guide-btn").addEventListener("click", () => openHelpModal("metrics"));
+    document.getElementById("open-metrics-help-btn").addEventListener("click", () => openHelpModal("metrics"));
+    document.getElementById("close-help-btn").addEventListener("click", () => helpDialog.close());
+    document.getElementById("tab-sim-btn").addEventListener("click", () => switchHelpTab("sim"));
+    document.getElementById("tab-metrics-btn").addEventListener("click", () => switchHelpTab("metrics"));
+    helpDialog.addEventListener("click", (ev) => {{
+      if (ev.target === helpDialog) helpDialog.close();
+    }});
 
     document.querySelectorAll(".sim-btn").forEach((btn) => {{
       btn.addEventListener("click", () => {{

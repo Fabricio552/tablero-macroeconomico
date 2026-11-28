@@ -377,3 +377,47 @@ def test_send_optional_alerts_email_gmail_ssl_and_starttls_with_chart(monkeypatc
     assert ("starttls",) in events
     sent_tls = [item[1] for item in events if item[0] == "send"][0]
     assert sent_tls["To"] == "equipo@empresa.com, finanzas@empresa.com"
+
+
+def test_generate_interactive_dashboard_includes_explanations_and_simulator_help(tmp_path):
+    from src.report import generate_interactive_dashboard
+
+    dates = pd.bdate_range("2026-10-01", periods=25)
+    df = pd.DataFrame(
+        {
+            "USD/UYU": np.linspace(39.5, 40.77, 25),
+            "USD/BRL": np.linspace(5.5, 5.74, 25),
+            "BRL/UYU": np.linspace(7.4, 7.22, 25),
+            "USD/ARS": np.linspace(1500.0, 1601.0, 25),
+            "UI (BCU)": np.linspace(6.65, 6.7172, 25),
+            "DXY": np.linspace(102.0, 103.77, 25),
+            "WTI Oil": np.linspace(80.0, 84.87, 25),
+            "Gold": np.linspace(3700.0, 3596.5, 25),
+            "US 10Y Yield": np.linspace(4.70, 4.85, 25),
+        },
+        index=dates,
+    )
+    summary = compute_summary_metrics(df)
+    corr = compute_correlations(df, window=20)
+    alerts = detect_alerts(summary)
+    brief = generate_morning_brief(summary, alerts)
+
+    out_html = tmp_path / "index.html"
+    generate_interactive_dashboard(
+        df=df,
+        summary_df=summary,
+        corr_matrix=corr,
+        alerts=alerts,
+        brief=brief,
+        sources={"market": "test"},
+        output_path=str(out_html),
+    )
+    content = out_html.read_text(encoding="utf-8")
+    assert 'id="open-sim-help-btn"' in content
+    assert 'id="open-guide-btn"' in content
+    assert 'id="open-metrics-help-btn"' in content
+    assert 'id="help-dialog"' in content
+    assert 'id="sim-live-breakdown"' in content
+    assert "Z-Score 1D" in content
+    assert "Vol 20D" in content
+    assert "Rango 52S" in content
